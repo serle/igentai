@@ -6,6 +6,12 @@
 # Claude-specific files
 .claude/
 
+# Project documentation (private)
+/notes/backend_task.md
+/notes/backend_task.pdf
+/notes/brief.md
+/notes/maestro.md
+
 # Rust/Cargo build artifacts
 /target/
 **/*.rs.bk
