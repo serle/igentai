@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Orchestration Dashboard</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <h1>LLM Orchestration System</h1>
+            <div class="connection-status" id="connection-status">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-text">Connecting...</span>
+            </div>
+        </header>
+
+        <main class="main">
+            <!-- Control Panel -->
+            <section class="card control-panel">
+                <h2>Control Panel</h2>
+                <form id="topic-form" class="topic-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="topic-input">Topic</label>
+                            <input 
+                                type="text" 
+                                id="topic-input" 
+                                placeholder="Enter topic (e.g., 'Paris attractions', 'programming languages')" 
+                                required
+                                autocomplete="off"
+                            >
+                        </div>
+                        <div class="form-group">
+                            <label for="producer-count">Producers</label>
+                            <input 
+                                type="number" 
+                                id="producer-count" 
+                                value="5" 
+                                min="1" 
+                                max="10"
+                                title="Number of concurrent LLM producers (1-10)"
+                            >
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="custom-prompt">Custom Prompt (Optional)</label>
+                            <textarea 
+                                id="custom-prompt" 
+                                rows="3"
+                                placeholder="Leave empty for default prompt, or customize for better results..."
+                            ></textarea>
+                        </div>
+                    </div>
+                    <div class="button-group">
+                        <button type="submit" id="start-btn" class="btn btn-primary">Start Generation</button>
+                        <button type="button" id="stop-btn" class="btn btn-secondary" disabled>Stop Generation</button>
+                    </div>
+                </form>
+            </section>
+
+            <!-- System Metrics -->
+            <section class="card metrics-section">
+                <h2>System Metrics</h2>
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">Total Unique Entries</div>
+                        <div class="metric-value" id="total-unique">0</div>
+                        <div class="metric-trend" id="total-trend"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Entries per Minute</div>
+                        <div class="metric-value" id="entries-per-minute">0.0</div>
+                        <div class="metric-trend" id="rate-trend"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Active Producers</div>
+                        <div class="metric-value" id="active-producers">0</div>
+                        <div class="metric-trend" id="producers-trend"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">System Uptime</div>
+                        <div class="metric-value" id="system-uptime">0s</div>
+                        <div class="metric-trend" id="uptime-trend"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Performance Chart -->
+            <section class="card chart-section">
+                <h2>Performance Trends</h2>
+                <div class="chart-container">
+                    <canvas id="performance-chart" width="800" height="300"></canvas>
+                </div>
+                <div class="chart-controls">
+                    <button class="btn btn-small" onclick="window.dashboard.toggleChartData('rate')">Toggle Rate</button>
+                    <button class="btn btn-small" onclick="window.dashboard.toggleChartData('unique')">Toggle Unique Count</button>
+                    <button class="btn btn-small" onclick="window.dashboard.clearChart()">Clear Chart</button>
+                </div>
+            </section>
+
+            <!-- LLM Provider Performance -->
+            <section class="card providers-section">
+                <h2>LLM Provider Performance</h2>
+                <div id="provider-performance" class="provider-grid">
+                    <!-- Provider metrics will be populated here -->
+                </div>
+            </section>
+
+            <!-- Recent Attributes -->
+            <section class="card attributes-section">
+                <h2>Recent Unique Attributes</h2>
+                <div class="attributes-header">
+                    <div class="current-topic">
+                        Topic: <span id="current-topic">None</span>
+                    </div>
+                    <div class="attributes-count">
+                        Showing latest <span id="recent-count">0</span> attributes
+                    </div>
+                </div>
+                <div class="attributes-container" id="attributes-container">
+                    <div class="no-attributes">No attributes generated yet. Start a topic to begin.</div>
+                </div>
+            </section>
+
+            <!-- System Logs -->
+            <section class="card logs-section">
+                <h2>System Alerts</h2>
+                <div class="logs-header">
+                    <button class="btn btn-small" onclick="window.dashboard.clearLogs()">Clear Logs</button>
+                </div>
+                <div class="log-container" id="log-container">
+                    <div class="log-entry log-info">
+                        <span class="log-time">--:--:--</span>
+                        <span class="log-message">System ready. Connect to start generation.</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

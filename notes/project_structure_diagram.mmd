@@ -1,0 +1,44 @@
+graph TB
+    subgraph "Workspace: igentai/"
+        WS["📦 Workspace Root<br/>Cargo.toml"]
+        
+        subgraph "Components"
+            ORC["🎛️ orchestrator/<br/>Master Process"]
+            PROD["⚡ producer/<br/>LLM Clients"]
+            WEB["🌐 webserver/<br/>Dashboard"]
+            SHARED["📚 shared/<br/>Common Types"]
+        end
+        
+        subgraph "Runtime Files"
+            OUT["📄 output.txt<br/>Unique Attributes"]
+            MET["📊 metrics.json<br/>Performance Data"]
+            STATE["💾 state.json<br/>Recovery State"]
+        end
+        
+        subgraph "Documentation"
+            NOTES["📋 notes/<br/>Design Docs"]
+            TESTS["🧪 Comprehensive<br/>Test Suites"]
+        end
+    end
+    
+    %% Dependencies
+    ORC --> SHARED
+    PROD --> SHARED
+    WEB --> SHARED
+    
+    %% Data Flow
+    ORC --> OUT
+    ORC --> MET
+    ORC --> STATE
+    
+    %% Process Control
+    ORC -.->|spawns| PROD
+    ORC -.->|spawns| WEB
+    
+    classDef component fill:#667eea,stroke:#333,stroke-width:2px,color:#fff
+    classDef runtime fill:#38a169,stroke:#333,stroke-width:2px,color:#fff
+    classDef doc fill:#f59e0b,stroke:#333,stroke-width:2px,color:#fff
+    
+    class ORC,PROD,WEB,SHARED component
+    class OUT,MET,STATE runtime
+    class NOTES,TESTS doc

@@ -1,0 +1,26 @@
+[package]
+name = "producer"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "producer"
+path = "src/main.rs"
+
+[dependencies]
+shared.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+
+# Bloom filter (Phase 2)
+bloom = { version = "0.3", optional = true }
+
+[features]
+bloom-filter = ["bloom"]
