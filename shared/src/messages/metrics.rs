@@ -63,9 +63,9 @@ pub enum SystemHealth {
     Unhealthy,
 }
 
-/// Generation metadata from LLM API calls
+/// Provider request metadata from LLM API calls
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GenerationMetadata {
+pub struct ProviderRequestMetadata {
     pub response_time_ms: u64,
     pub tokens_used: u32,
     pub prompt_tokens: u32,

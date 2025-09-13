@@ -8,7 +8,8 @@ use tokio::time::timeout;
 
 use shared::{ProducerId, ProcessStatus, ProcessType, SystemMetrics};
 use crate::services::process_manager::RealProcessManager;
-use crate::traits::{ProcessManager, KeyValuePair};
+use crate::traits::ProcessManager;
+use shared::KeyValuePair;
 
 /// Test basic producer spawning and channel establishment
 #[tokio::test]

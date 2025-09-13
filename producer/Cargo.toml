@@ -18,9 +18,15 @@ anyhow.workspace = true
 clap.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+async-trait = "0.1"
+regex = "1.0"
 
-# Bloom filter (Phase 2)
-bloom = { version = "0.3", optional = true }
+# Bloom filter
+bloom = "0.3"
 
-[features]
-bloom-filter = ["bloom"]
+# Testing dependencies  
+mockall = "0.12"
+
+[dev-dependencies]
+tokio-test = "0.4"
+

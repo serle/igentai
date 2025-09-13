@@ -16,7 +16,8 @@ use tokio::{sync::mpsc, task::JoinHandle};
 
 use shared::{ProducerId, SystemMetrics, ProcessHealth, ProcessType, ProcessStatus};
 use crate::error::OrchestratorResult;
-use crate::traits::{ProcessManager, ProducerHandle, WebServerHandle, KeyValuePair};
+use crate::traits::{ProcessManager, ProducerHandle, WebServerHandle};
+use shared::KeyValuePair;
 
 /// Internal runtime tracking for a simulated producer task
 struct ProducerRuntime {

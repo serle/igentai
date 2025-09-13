@@ -11,7 +11,7 @@ mod orchestrator_impl;
 
 use error::OrchestratorResult;
 use orchestrator_impl::Orchestrator;
-use services::{RealApiKeySource, RealFileSystem, RealProcessManager, RealMessageTransport};
+use services::{RealApiKeySource, RealFileSystem, RealProcessManager, RealIpcCommunicator, RealOptimizer};
 
 #[derive(Parser)]
 #[command(name = "orchestrator")]
@@ -24,7 +24,7 @@ struct Args {
 }
 
 /// Type alias for production orchestrator 
-pub type ProductionOrchestrator = Orchestrator<RealApiKeySource, RealFileSystem, RealProcessManager, RealMessageTransport>;
+pub type ProductionOrchestrator = Orchestrator<RealApiKeySource, RealFileSystem, RealProcessManager, RealIpcCommunicator, RealOptimizer>;
 
 impl ProductionOrchestrator {
     /// Create production orchestrator with real dependencies
@@ -35,34 +35,12 @@ impl ProductionOrchestrator {
             RealApiKeySource,
             RealFileSystem::new(),
             RealProcessManager::new(),
-            RealMessageTransport::new(),
+            RealIpcCommunicator::new(),
+            RealOptimizer::new(),
         )
     }
 }
 
-/// Type alias for test orchestrator
-#[cfg(test)]
-pub type TestOrchestrator = Orchestrator<
-    traits::MockApiKeySource, 
-    traits::MockFileSystem, 
-    traits::MockProcessManager, 
-    traits::MockMessageTransport
->;
-
-#[cfg(test)]
-impl TestOrchestrator {
-    /// Create test orchestrator with all mock dependencies
-    pub fn new_test(producer_count: u32, webserver_port: u16) -> Self {
-        Self::new(
-            producer_count,
-            webserver_port,
-            traits::MockApiKeySource::new(),
-            traits::MockFileSystem::new(),
-            traits::MockProcessManager::new(),
-            traits::MockMessageTransport::new(),
-        )
-    }
-}
 
 #[tokio::main]
 async fn main() -> OrchestratorResult<()> {
@@ -73,7 +51,6 @@ async fn main() -> OrchestratorResult<()> {
     
     // Demo workflow with IPC coordination
     orchestrator.start_producers("coordinated_demo".to_string()).await?;
-    orchestrator.start_file_sync().await?;
     
     // Run orchestration cycles
     for i in 0..5 {
@@ -82,7 +59,7 @@ async fn main() -> OrchestratorResult<()> {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     
-    orchestrator.stop_file_sync().await?;
+    orchestrator.sync_files().await?;
     orchestrator.stop_producers().await?;
     
     println!("Coordinated demo completed");

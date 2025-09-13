@@ -1,6 +1,6 @@
-//! Message transport service implementation
+//! IPC communicator service implementation
 //!
-//! This module contains the production message transport implementation that manages
+//! This module contains the production IPC communication implementation that manages
 //! communication channels between the orchestrator and producer/webserver processes.
 
 use std::collections::HashMap;
@@ -12,29 +12,39 @@ use tokio::net::TcpListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use shared::{ProducerId, SystemMetrics, TaskRequest, TaskUpdate};
 use crate::error::OrchestratorResult;
-use crate::traits::{MessageTransport, ProducerHandle, WebServerHandle};
+use crate::traits::{IpcCommunicator, ProducerHandle, WebServerHandle};
 
-/// Real message transport using tokio mpsc channels for producers and TCP for webserver
+/// Real IPC communicator using tokio mpsc channels for producers and TCP for webserver
 /// 
 /// Provides actual inter-process communication coordination using async channels for producers
 /// and TCP + bincode protocol for webserver communication using TaskRequest/TaskUpdate messages.
-pub struct RealMessageTransport {
+pub struct RealIpcCommunicator {
     // Producer inbound message receivers keyed by ProducerId
     producers: Arc<Mutex<HashMap<ProducerId, mpsc::Receiver<Vec<String>>>>>,
+    // Producer TCP addresses for sending ProducerCommand messages
+    producer_addresses: Arc<Mutex<HashMap<ProducerId, SocketAddr>>>,
     // Webserver TCP address for sending TaskUpdate messages
     webserver_address: Arc<Mutex<Option<SocketAddr>>>,
     // Channel for queuing TaskRequest messages from webserver
     webserver_requests: Arc<Mutex<Option<mpsc::Receiver<TaskRequest>>>>,
 }
 
-impl RealMessageTransport {
-    /// Create a new message transport service instance
+impl RealIpcCommunicator {
+    /// Create a new IPC communicator service instance
     pub fn new() -> Self {
         Self {
             producers: Arc::new(Mutex::new(HashMap::new())),
+            producer_addresses: Arc::new(Mutex::new(HashMap::new())),
             webserver_address: Arc::new(Mutex::new(None)),
             webserver_requests: Arc::new(Mutex::new(None)),
         }
+    }
+    
+    /// Register producer address for sending commands
+    pub async fn register_producer_address(&self, producer_id: ProducerId, address: SocketAddr) {
+        let mut addresses = self.producer_addresses.lock().await;
+        addresses.insert(producer_id.clone(), address);
+        println!("Registered producer {} at address {}", producer_id, address);
     }
     
     /// Send TaskUpdate message to webserver via TCP + bincode (internal implementation)
@@ -146,7 +156,7 @@ impl RealMessageTransport {
 }
 
 #[async_trait::async_trait]
-impl MessageTransport for RealMessageTransport {
+impl IpcCommunicator for RealIpcCommunicator {
     async fn establish_producer_channels(
         &self,
         producer_handles: Vec<ProducerHandle>,
@@ -190,7 +200,7 @@ impl MessageTransport for RealMessageTransport {
         let mut map = self.producers.lock().await;
         let mut all_batches: Vec<(ProducerId, Vec<String>)> = Vec::new();
 
-        // Drain each receiver non-blockingly to collect available batches
+        // Drain each receiver in non-blocking manner to collect available batches
         for (pid, rx) in map.iter_mut() {
             loop {
                 match rx.try_recv() {
@@ -224,9 +234,115 @@ impl MessageTransport for RealMessageTransport {
         self.send_task_update_internal(update).await
     }
 
+    async fn send_producer_command(&self, producer_id: ProducerId, command: shared::ProducerCommand) -> OrchestratorResult<()> {
+        let producer_addr = {
+            let addresses = self.producer_addresses.lock().await;
+            addresses.get(&producer_id).cloned()
+        };
+        
+        if let Some(addr) = producer_addr {
+            match tokio::net::TcpStream::connect(addr).await {
+                Ok(mut stream) => {
+                    let serialized = bincode::serialize(&command)
+                        .map_err(|e| crate::error::OrchestratorError::SerializationError {
+                            message: format!("Failed to serialize ProducerCommand: {}", e)
+                        })?;
+                    
+                    // Send message length first (4 bytes)
+                    let len = serialized.len() as u32;
+                    if let Err(e) = stream.write_all(&len.to_le_bytes()).await {
+                        println!("Failed to send message length to producer {}: {}", producer_id, e);
+                        return Ok(()); // Don't fail orchestrator if producer is down
+                    }
+                    
+                    // Send the serialized message
+                    if let Err(e) = stream.write_all(&serialized).await {
+                        println!("Failed to send ProducerCommand to producer {}: {}", producer_id, e);
+                        return Ok(()); // Don't fail orchestrator if producer is down
+                    }
+                    
+                    println!("📤 Sent ProducerCommand to producer {}: {:?}", producer_id, command);
+                }
+                Err(e) => {
+                    println!("Failed to connect to producer {} at {}: {}", producer_id, addr, e);
+                    // Don't fail orchestrator if producer is temporarily unavailable
+                }
+            }
+        } else {
+            println!("No address registered for producer {}", producer_id);
+        }
+        
+        Ok(())
+    }
+
+    async fn start_producer_update_listener(&self, listen_addr: std::net::SocketAddr) -> OrchestratorResult<mpsc::Receiver<shared::ProducerUpdate>> {
+        let listener = TcpListener::bind(listen_addr).await
+            .map_err(|e| crate::error::OrchestratorError::NetworkError {
+                message: format!("Failed to bind TCP listener for producer updates: {}", e)
+            })?;
+        
+        let (tx, rx) = mpsc::channel::<shared::ProducerUpdate>(100);
+        
+        println!("🔊 Listening for producer ProducerUpdate messages on {}", listen_addr);
+        
+        // Spawn task to handle incoming connections
+        tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((mut stream, addr)) => {
+                        println!("🔗 Accepted producer connection from: {}", addr);
+                        
+                        let tx_clone = tx.clone();
+                        tokio::spawn(async move {
+                            // Read message length (4 bytes)
+                            let mut len_buf = [0u8; 4];
+                            if let Err(e) = stream.read_exact(&mut len_buf).await {
+                                eprintln!("Failed to read message length from producer: {}", e);
+                                return;
+                            }
+                            
+                            let msg_len = u32::from_le_bytes(len_buf) as usize;
+                            if msg_len > 1024 * 1024 { // 1MB limit
+                                eprintln!("ProducerUpdate message too large: {} bytes", msg_len);
+                                return;
+                            }
+                            
+                            // Read the message
+                            let mut msg_buf = vec![0u8; msg_len];
+                            if let Err(e) = stream.read_exact(&mut msg_buf).await {
+                                eprintln!("Failed to read ProducerUpdate message: {}", e);
+                                return;
+                            }
+                            
+                            // Deserialize ProducerUpdate
+                            match bincode::deserialize::<shared::ProducerUpdate>(&msg_buf) {
+                                Ok(update) => {
+                                    println!("📨 Received ProducerUpdate from producer: {:?}", update);
+                                    if let Err(e) = tx_clone.send(update).await {
+                                        eprintln!("Failed to forward ProducerUpdate to orchestrator: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to deserialize ProducerUpdate: {}", e);
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to accept producer connection: {}", e);
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        });
+        
+        Ok(rx)
+    }
+
     async fn shutdown_communication(&self) -> OrchestratorResult<()> {
         // Dropping all senders/receivers will close channels and stop tasks
         self.producers.lock().await.clear();
+        self.producer_addresses.lock().await.clear();
         *self.webserver_address.lock().await = None;
         *self.webserver_requests.lock().await = None;
         println!("Communication channels shut down");

@@ -9,12 +9,15 @@ pub mod errors;
 pub mod messages;
 
 pub use types::*;
+
+// Re-export commonly used types
+pub use types::{KeyValuePair, ApiFailure, ProviderId, RoutingStrategy};
 pub use errors::*;
 
 // Re-export only inter-process communication messages
 pub use messages::{
     // Producer ↔ Orchestrator communication
-    ProducerMessage, GenerationMetadata,
+    ProducerCommand, ProducerUpdate, ProducerMessage, ProviderRequestMetadata,
     
     // WebServer ↔ Orchestrator communication  
     TaskRequest, TaskUpdate,

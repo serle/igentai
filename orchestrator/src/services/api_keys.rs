@@ -23,7 +23,8 @@
 //! - `MISTRAL_API_KEY`: Mistral AI API key
 //! - `GROQ_API_KEY`: Groq API key
 
-use crate::traits::{ApiKeySource, KeyValuePair, RequiredKeyMissing};
+use crate::traits::{ApiKeySource, RequiredKeyMissing};
+use shared::KeyValuePair;
 
 /// Real API key source using environment variables
 pub struct RealApiKeySource;

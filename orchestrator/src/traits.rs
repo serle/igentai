@@ -4,16 +4,10 @@
 //! components with proper mockall mock generation annotations. These traits are
 //! used for dependency injection and enable comprehensive testing.
 
-use shared::{ProducerId, SystemMetrics, ProcessHealth};
+use shared::{ProducerId, SystemMetrics, ProcessHealth, KeyValuePair};
 use crate::error::OrchestratorResult;
+use crate::services::optimizer::{OptimizationStats, OptimizationPlan};
 use tokio::sync::mpsc;
-
-/// Key-value pair for API keys
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyValuePair {
-    pub key: String,
-    pub value: String,
-}
 
 /// Error when a required API key is missing
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,13 +115,13 @@ pub trait ProcessManager: Send + Sync {
     async fn stop_webserver(&self) -> OrchestratorResult<()>;
 }
 
-/// Message transport abstraction for orchestrator IPC coordination
+/// IPC communication abstraction for orchestrator coordination
 /// 
 /// This trait manages the communication channels between the orchestrator and
 /// producer/webserver processes, handling message routing and coordination.
 #[mockall::automock]
 #[async_trait::async_trait]
-pub trait MessageTransport: Send + Sync {
+pub trait IpcCommunicator: Send + Sync {
     /// Establish communication channels for producer processes
     /// 
     /// # Parameters
@@ -182,6 +176,22 @@ pub trait MessageTransport: Send + Sync {
     /// - `update`: TaskUpdate message to send to webserver
     async fn send_task_update(&self, update: shared::TaskUpdate) -> OrchestratorResult<()>;
 
+    /// Send ProducerCommand message to producer
+    ///
+    /// # Parameters
+    /// - `producer_id`: Target producer ID
+    /// - `command`: ProducerCommand message to send to producer
+    async fn send_producer_command(&self, producer_id: ProducerId, command: shared::ProducerCommand) -> OrchestratorResult<()>;
+
+    /// Listen for ProducerUpdate messages from producers
+    ///
+    /// # Parameters
+    /// - `listen_addr`: Address to bind TCP listener for incoming updates
+    /// 
+    /// # Returns
+    /// Receiver channel for ProducerUpdate messages from producers
+    async fn start_producer_update_listener(&self, listen_addr: std::net::SocketAddr) -> OrchestratorResult<tokio::sync::mpsc::Receiver<shared::ProducerUpdate>>;
+
     /// Shutdown all communication channels
     async fn shutdown_communication(&self) -> OrchestratorResult<()>;
 }
@@ -210,6 +220,33 @@ pub trait FileSystem: Send + Sync {
     async fn sync_files(&self) -> OrchestratorResult<()>;
 }
 
+/// Optimizer abstraction for intelligent prompt generation and routing strategy tuning
+/// 
+/// This trait analyzes producer performance statistics and generates optimized
+/// prompts and routing strategies to maximize unique attributes per minute.
+#[mockall::automock]
+#[async_trait::async_trait]
+pub trait Optimizer: Send + Sync {
+    /// Generate optimized prompt and routing strategy for a given topic
+    /// 
+    /// # Parameters
+    /// - `topic`: Raw topic from web UI
+    /// - `current_stats`: Current system performance statistics
+    /// 
+    /// # Returns
+    /// Optimization plan with prompt, routing strategy, and confidence metrics
+    async fn optimize_for_topic(&self, topic: &str, current_stats: &OptimizationStats) -> OrchestratorResult<OptimizationPlan>;
+    
+    /// Analyze current performance and suggest optimizations
+    /// 
+    /// # Parameters
+    /// - `current_stats`: Performance statistics from all producers
+    /// 
+    /// # Returns
+    /// Optional optimization plan if improvements are recommended
+    async fn analyze_and_suggest(&self, current_stats: &OptimizationStats) -> OrchestratorResult<Option<OptimizationPlan>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,9 +255,10 @@ mod tests {
     #[tokio::test]
     async fn test_mock_trait_instantiation() {
         let _mock_process_manager = MockProcessManager::new();
-        let _mock_message_transport = MockMessageTransport::new();
+        let _mock_ipc_communicator = MockIpcCommunicator::new();
         let _mock_file_system = MockFileSystem::new();
         let _mock_api_key_source = MockApiKeySource::new();
+        let _mock_optimizer = MockOptimizer::new();
         
         // If this compiles and runs, our mock generation is working
         assert!(true);

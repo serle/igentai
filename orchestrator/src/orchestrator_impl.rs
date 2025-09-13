@@ -6,15 +6,16 @@ use shared::{ProducerId, SystemMetrics, ProcessStatus};
 
 use crate::error::{OrchestratorResult, OrchestratorError};
 use crate::state::OrchestratorState;
-use crate::traits::{ApiKeySource, ProcessManager, MessageTransport, FileSystem};
+use crate::traits::{ApiKeySource, ProcessManager, IpcCommunicator, FileSystem, Optimizer};
 
 /// Enhanced orchestrator with IPC coordination and monitoring
-pub struct Orchestrator<A, F, P, M>
+pub struct Orchestrator<A, F, P, M, O>
 where
     A: ApiKeySource,
     F: FileSystem,
     P: ProcessManager,
-    M: MessageTransport,
+    M: IpcCommunicator,
+    O: Optimizer,
 {
     // Configuration
     producer_count: u32,
@@ -24,10 +25,11 @@ where
     state: OrchestratorState,
     
     // Injected dependencies (mockable for testing)
-    api_keys: Arc<A>,
-    file_system: Arc<F>,
-    process_manager: Arc<P>,
-    message_transport: Arc<M>,
+    api_keys: A,
+    file_system: F,
+    process_manager: P,
+    ipc_communicator: M,
+    optimizer: O,
     
     // Process monitoring
     monitoring_active: Arc<AtomicBool>,
@@ -40,23 +42,25 @@ where
     start_time: Instant,
 }
 
-impl<A, F, P, M> Orchestrator<A, F, P, M>
+impl<A, F, P, M, O> Orchestrator<A, F, P, M, O>
 where
     A: ApiKeySource + Send + Sync + 'static,
     F: FileSystem + Send + Sync + 'static,
     P: ProcessManager + Send + Sync + 'static,
-    M: MessageTransport + Send + Sync + 'static,
+    M: IpcCommunicator + Send + Sync + 'static,
+    O: Optimizer + Send + Sync + 'static,
 {
     /// Create orchestrator with all injected dependencies
-    pub fn new(producer_count: u32, webserver_port: u16, api_keys: A, file_system: F, process_manager: P, message_transport: M) -> Self {
+    pub fn new(producer_count: u32, webserver_port: u16, api_keys: A, file_system: F, process_manager: P, ipc_communicator: M, optimizer: O) -> Self {
         Self {
             producer_count,
             webserver_port,
             state: OrchestratorState::new(),
-            api_keys: Arc::new(api_keys),
-            file_system: Arc::new(file_system),
-            process_manager: Arc::new(process_manager),
-            message_transport: Arc::new(message_transport),
+            api_keys,
+            file_system,
+            process_manager,
+            ipc_communicator,
+            optimizer,
             monitoring_active: Arc::new(AtomicBool::new(false)),
             monitoring_handle: None,
             current_topic: None,
@@ -87,7 +91,7 @@ where
     /// Single orchestrator cycle iteration
     pub async fn next(&mut self) -> OrchestratorResult<()> {
         // Process incoming messages from producers
-        let producer_batches = self.message_transport.process_messages().await?;
+        let producer_batches = self.ipc_communicator.process_messages().await?;
         
         // Handle uniqueness checking for each batch
         for (producer_id, candidates) in producer_batches {
@@ -96,7 +100,7 @@ where
         
         // Send metrics updates to web server
         let metrics = self.get_metrics();
-        self.message_transport.send_updates(metrics).await?;
+        self.ipc_communicator.send_updates(metrics).await?;
         
         Ok(())
     }
@@ -128,7 +132,7 @@ where
     pub async fn start_webserver_listener(&self) -> OrchestratorResult<tokio::sync::mpsc::Receiver<shared::TaskRequest>> {
         // Start listening for TaskRequest messages from webserver
         let listen_addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8080)); // TODO: Make configurable
-        self.message_transport.start_task_request_listener(listen_addr).await
+        self.ipc_communicator.start_task_request_listener(listen_addr).await
     }
     
     /// Handle incoming TaskRequest from webserver
@@ -152,7 +156,7 @@ where
                 
                 // Send status update back to webserver
                 let current_metrics = self.calculate_system_metrics().await;
-                self.message_transport.send_updates(current_metrics).await?;
+                self.ipc_communicator.send_updates(current_metrics).await?;
             }
             shared::TaskRequest::StopGeneration => {
                 println!("⏹️ Stopping topic generation");
@@ -160,14 +164,14 @@ where
                 
                 // Send status update back to webserver
                 let current_metrics = self.calculate_system_metrics().await;
-                self.message_transport.send_updates(current_metrics).await?;
+                self.ipc_communicator.send_updates(current_metrics).await?;
             }
             shared::TaskRequest::RequestStatus => {
                 println!("📊 Sending status update to webserver");
                 
                 // Send current status back to webserver
                 let current_metrics = self.calculate_system_metrics().await;
-                self.message_transport.send_updates(current_metrics).await?;
+                self.ipc_communicator.send_updates(current_metrics).await?;
             }
         }
         
@@ -206,7 +210,7 @@ where
             .await?;
         
         // Establish communication channels using coordination info
-        self.message_transport
+        self.ipc_communicator
             .establish_producer_channels(producer_handles)
             .await?;
         
@@ -215,12 +219,11 @@ where
             .spawn_webserver_with_channel(self.webserver_port)
             .await?;
         
-        self.message_transport
+        self.ipc_communicator
             .establish_webserver_channel(webserver_handle)
             .await?;
         
-        // Start process monitoring
-        self.start_process_monitoring(topic.clone()).await?;
+        // Process monitoring will be handled through regular method calls
         
         self.current_topic = Some(topic);
         println!("All processes started with IPC coordination complete");
@@ -237,28 +240,16 @@ where
         self.process_manager.stop_webserver().await?;
         
         // Shutdown communication channels
-        self.message_transport.shutdown_communication().await?;
+        self.ipc_communicator.shutdown_communication().await?;
         
         self.current_topic = None;
         println!("All processes stopped and communication channels closed");
         Ok(())
     }
 
-    /// Start file synchronization
-    pub async fn start_file_sync(&mut self) -> OrchestratorResult<()> {
-        self.file_sync_active.store(true, Ordering::Relaxed);
-        
-        let file_system = self.file_system.clone();
-        let sync_active = self.file_sync_active.clone();
-        
-        tokio::spawn(async move {
-            while sync_active.load(Ordering::Relaxed) {
-                let _ = file_system.sync_files().await;
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-        });
-        
-        Ok(())
+    /// Synchronize files to disk
+    pub async fn sync_files(&mut self) -> OrchestratorResult<()> {
+        self.file_system.sync_files().await
     }
 
     /// Stop file synchronization
@@ -268,76 +259,52 @@ where
         Ok(())
     }
 
-    /// Start process monitoring with automatic restart
-    async fn start_process_monitoring(&mut self, topic: String) -> OrchestratorResult<()> {
-        if self.monitoring_active.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        
-        self.monitoring_active.store(true, Ordering::Relaxed);
-        
-        let process_manager = self.process_manager.clone();
-        let message_transport = self.message_transport.clone();
-        let api_keys = self.api_keys.clone();
-        let monitoring_active = self.monitoring_active.clone();
-        
-        let handle = tokio::spawn(async move {
-            println!("Process monitoring started for topic: {}", topic);
+    /// Check process health and restart failed producers if needed
+    pub async fn check_and_restart_failed_processes(&mut self) -> OrchestratorResult<()> {
+        if let Some(topic) = &self.current_topic {
+            let health_reports = self.process_manager.monitor_processes().await?;
             
-            while monitoring_active.load(Ordering::Relaxed) {
-                // Check process health
-                if let Ok(health_reports) = process_manager.monitor_processes().await {
-                    for health in health_reports {
-                        if health.status == ProcessStatus::Failed {
-                            println!("Detected failed producer: {}, attempting restart", health.process_id);
-                            
-                            // Attempt restart with API key injection
-                            let producer_id = match ProducerId::from_string(&health.process_id) {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    println!("Invalid producer ID {}: {}", health.process_id, e);
-                                    continue;
-                                }
-                            };
-                            
-                            let keys = match api_keys.get_api_keys().await {
-                                Ok(keys) => keys,
-                                Err(e) => {
-                                    println!("Failed to get API keys for restart: {}", e.message);
-                                    continue;
-                                }
-                            };
-                            
-                            match process_manager
-                                .restart_failed_producer(producer_id, &topic, keys)
+            for health in health_reports {
+                if health.status == ProcessStatus::Failed {
+                    println!("Detected failed producer: {}, attempting restart", health.process_id);
+                    
+                    // Attempt restart with API key injection
+                    let producer_id = match ProducerId::from_string(&health.process_id) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            println!("Invalid producer ID {}: {}", health.process_id, e);
+                            continue;
+                        }
+                    };
+                    
+                    let keys = self.api_keys.get_api_keys().await
+                        .map_err(|e| OrchestratorError::ConfigurationError { 
+                            field: e.message 
+                        })?;
+                    
+                    match self.process_manager
+                        .restart_failed_producer(producer_id, topic, keys)
+                        .await
+                    {
+                        Ok(new_handle) => {
+                            // Reestablish communication channel
+                            if let Err(e) = self.ipc_communicator
+                                .reestablish_producer_channel(new_handle)
                                 .await
                             {
-                                Ok(new_handle) => {
-                                    // Reestablish communication channel
-                                    if let Err(e) = message_transport
-                                        .reestablish_producer_channel(new_handle)
-                                        .await
-                                    {
-                                        println!("Failed to reestablish channel for {}: {}", health.process_id, e);
-                                    } else {
-                                        println!("Successfully restarted and reconnected producer {}", health.process_id);
-                                    }
-                                }
-                                Err(e) => {
-                                    println!("Failed to restart producer {}: {}", health.process_id, e);
-                                }
+                                println!("Failed to reestablish channel for {}: {}", health.process_id, e);
+                            } else {
+                                println!("Successfully restarted and reconnected producer {}", health.process_id);
                             }
+                        }
+                        Err(e) => {
+                            println!("Failed to restart producer {}: {}", health.process_id, e);
                         }
                     }
                 }
-                
-                tokio::time::sleep(Duration::from_secs(5)).await;
             }
-            
-            println!("Process monitoring stopped");
-        });
+        }
         
-        self.monitoring_handle = Some(handle);
         Ok(())
     }
     

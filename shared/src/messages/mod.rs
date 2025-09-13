@@ -16,10 +16,10 @@ pub mod config;
 // Re-export commonly used types at module level for convenience
 pub use metrics::{
     SystemMetrics, LLMPerformance, AttributeUpdate, SystemHealth,
-    GenerationMetadata, BloomFilterStats,
+    ProviderRequestMetadata, BloomFilterStats,
 };
 
-pub use producer::ProducerMessage;
+pub use producer::{ProducerCommand, ProducerUpdate, ProducerMessage};
 
 pub use webserver::{TaskRequest, TaskUpdate};
 

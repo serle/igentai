@@ -13,7 +13,7 @@ pub struct OrchestratorBuilder {
     api_keys: MockApiKeySource,
     file_system: MockFileSystem,
     process_manager: MockProcessManager,
-    message_transport: MockMessageTransport,
+    ipc_communicator: MockIpcCommunicator,
 }
 
 impl OrchestratorBuilder {
@@ -22,7 +22,7 @@ impl OrchestratorBuilder {
         let mut api_keys = MockApiKeySource::new();
         let mut file_system = MockFileSystem::new();
         let process_manager = MockProcessManager::new();
-        let mut message_transport = MockMessageTransport::new();
+        let mut ipc_communicator = MockIpcCommunicator::new();
         
         // Set up default successful behaviors to prevent panics
         api_keys
@@ -35,12 +35,12 @@ impl OrchestratorBuilder {
             .returning(|_| Ok(()))
             .times(0..);
             
-        message_transport
+        ipc_communicator
             .expect_process_messages()
             .returning(|| Ok(vec![]))
             .times(0..);
             
-        message_transport
+        ipc_communicator
             .expect_send_updates()
             .returning(|_| Ok(()))
             .times(0..);
@@ -51,7 +51,7 @@ impl OrchestratorBuilder {
             api_keys,
             file_system,
             process_manager,
-            message_transport,
+            ipc_communicator,
         }
     }
     
@@ -95,11 +95,11 @@ impl OrchestratorBuilder {
     }
     
     /// Configure the message transport mock with a setup function
-    pub fn with_message_transport<F>(mut self, setup: F) -> Self 
+    pub fn with_ipc_communicator<F>(mut self, setup: F) -> Self 
     where 
-        F: FnOnce(&mut MockMessageTransport)
+        F: FnOnce(&mut MockIpcCommunicator)
     {
-        setup(&mut self.message_transport);
+        setup(&mut self.ipc_communicator);
         self
     }
     
@@ -111,7 +111,7 @@ impl OrchestratorBuilder {
             self.api_keys,
             self.file_system,
             self.process_manager,
-            self.message_transport,
+            self.ipc_communicator,
         )
     }
 }
@@ -127,7 +127,7 @@ pub type TestOrchestrator = Orchestrator<
     MockApiKeySource,
     MockFileSystem, 
     MockProcessManager,
-    MockMessageTransport,
+    MockIpcCommunicator,
 >;
 
 /// Helper functions for common test operations
@@ -165,7 +165,7 @@ impl TestHelpers {
         let mut api_keys = MockApiKeySource::new();
         let file_system = MockFileSystem::new();
         let process_manager = MockProcessManager::new();
-        let mut message_transport = MockMessageTransport::new();
+        let mut ipc_communicator = MockIpcCommunicator::new();
         
         // Set up failing validation
         api_keys
@@ -177,7 +177,7 @@ impl TestHelpers {
             }));
             
         // Still need other default expectations
-        message_transport
+        ipc_communicator
             .expect_send_updates()
             .returning(|_| Ok(()))
             .times(0..);
@@ -188,7 +188,7 @@ impl TestHelpers {
             api_keys,
             file_system,
             process_manager,
-            message_transport,
+            ipc_communicator,
         )
     }
     
