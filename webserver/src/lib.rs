@@ -21,7 +21,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info};
 
-use shared::OrchestratorUpdate;
+use shared::{OrchestratorUpdate, ProcessId, process_debug, process_info};
 use crate::types::ClientMessage;
 // Handler wrapper functions for AppState
 use axum::Json;
@@ -226,6 +226,7 @@ where
                 tokio::select! {
                     // Handle orchestrator updates
                     Some(update) = orchestrator_updates.recv() => {
+                        debug!("📨 Received orchestrator update in webserver main loop");
                         if let Err(e) = self.handle_orchestrator_update(update).await {
                             error!("❌ Error handling orchestrator update: {}", e);
                         }
@@ -260,7 +261,16 @@ where
 
     /// Handle orchestrator update and broadcast to clients
     async fn handle_orchestrator_update(&self, update: OrchestratorUpdate) -> WebServerResult<()> {
-        debug!("📨 Received orchestrator update: {:?}", update);
+        let update_type = match &update {
+            OrchestratorUpdate::StatisticsUpdate { .. } => "StatisticsUpdate",
+            OrchestratorUpdate::NewAttributes { .. } => "NewAttributes", 
+            OrchestratorUpdate::GenerationComplete { .. } => "GenerationComplete",
+            OrchestratorUpdate::ErrorNotification(_) => "ErrorNotification",
+            _ => "Other",
+        };
+        
+        process_debug!(ProcessId::current(), "📨 Processing orchestrator update: {}", update_type);
+        process_debug!(ProcessId::current(), "📨 Full orchestrator update: {:?}", update);
 
         // Check connected clients
         let client_count = self.websocket_manager.client_count().await;
@@ -272,32 +282,32 @@ where
             state.process_orchestrator_update(update)
         };
 
-        info!("📤 Broadcasting {} client messages to {} clients", client_messages.len(), client_count);
+        process_debug!(ProcessId::current(), "📤 Broadcasting {} client messages to {} clients", client_messages.len(), client_count);
 
         // Broadcast messages to connected clients
         for message in client_messages {
             match &message {
                 ClientMessage::StatisticsUpdate { metrics, .. } => {
-                    info!("🔄 Broadcasting StatisticsUpdate: UAM={:.2}, cost/min=${:.4}", 
+                    process_debug!(ProcessId::current(), "🔄 Broadcasting StatisticsUpdate: UAM={:.2}, cost/min=${:.4}", 
                           metrics.uam, metrics.cost_per_minute);
                 }
                 ClientMessage::AttributeUpdate { attributes, .. } => {
-                    info!("🔄 Broadcasting AttributeUpdate: {} attributes", attributes.len());
+                    process_debug!(ProcessId::current(), "🔄 Broadcasting AttributeUpdate: {} attributes", attributes.len());
                 }
                 ClientMessage::GenerationComplete { topic, .. } => {
-                    info!("🔄 Broadcasting GenerationComplete: topic={}", topic);
+                    process_debug!(ProcessId::current(), "🔄 Broadcasting GenerationComplete: topic={}", topic);
                 }
                 ClientMessage::Alert { level, title, .. } => {
-                    info!("🔄 Broadcasting Alert: level={:?}, title={}", level, title);
+                    process_debug!(ProcessId::current(), "🔄 Broadcasting Alert: level={:?}, title={}", level, title);
                 }
                 ClientMessage::StatusUpdate { .. } => {
-                    info!("🔄 Broadcasting StatusUpdate");
+                    process_debug!(ProcessId::current(), "🔄 Broadcasting StatusUpdate");
                 }
                 ClientMessage::DashboardUpdate { .. } => {
-                    info!("🔄 Broadcasting DashboardUpdate");
+                    process_debug!(ProcessId::current(), "🔄 Broadcasting DashboardUpdate");
                 }
                 ClientMessage::ConnectionAck { .. } => {
-                    info!("🔄 Broadcasting ConnectionAck");
+                    process_debug!(ProcessId::current(), "🔄 Broadcasting ConnectionAck");
                 }
             }
             debug!("Broadcasting message: {:?}", message);

@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::error::{OrchestratorError, OrchestratorResult};
 use crate::traits::Communicator;
-use shared::{process_debug, OrchestratorCommand, OrchestratorUpdate, ProcessId, ProducerUpdate, WebServerRequest};
+use shared::{process_debug, process_error, OrchestratorCommand, OrchestratorUpdate, ProcessId, ProducerUpdate, WebServerRequest};
 
 /// Real communicator implementation using TCP + bincode protocol
 pub struct RealCommunicator {
@@ -195,10 +195,31 @@ impl Communicator for RealCommunicator {
 
         if ready {
             if let Some(addr) = address {
-                self.send(addr, &update).await?;
+                match self.send(addr, &update).await {
+                    Ok(()) => {
+                        // Success - continue normally
+                    }
+                    Err(e) => {
+                        process_error!(shared::ProcessId::current(), 
+                                     "❌ Failed to send webserver update: {}. Marking webserver as not ready.", e);
+                        
+                        // Mark webserver as not ready to trigger reconnection attempts
+                        {
+                            let mut ready = self.webserver_ready.lock().await;
+                            *ready = false;
+                        }
+                        
+                        return Err(e);
+                    }
+                }
+            } else {
+                process_error!(shared::ProcessId::current(), 
+                             "⚠️ Webserver marked as ready but no address available");
             }
         } else {
-            // Silently ignore if webserver not ready yet
+            process_debug!(shared::ProcessId::current(), 
+                          "📭 Webserver not ready - skipping update (type: {:?})", 
+                          std::mem::discriminant(&update));
         }
 
         Ok(())

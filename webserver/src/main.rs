@@ -31,9 +31,9 @@ struct Args {
     #[arg(long, default_value = "info")]
     log_level: String,
 
-    /// Port for API/IPC communication (internal communication)
-    #[arg(long, default_value = "6002")]
-    api_port: u16,
+    /// Listen port for receiving orchestrator updates (IPC communication, like producers)
+    #[arg(long)]
+    listen_port: Option<u16>,
 
     /// Static files directory
     #[arg(long, default_value = "./static")]
@@ -59,12 +59,23 @@ async fn main() -> WebServerResult<()> {
         .map(|url| shared::logging::TracingEndpoint::new(url.clone()));
     shared::logging::init_tracing_with_endpoint_and_level(trace_endpoint, Some(&args.log_level));
 
-    process_info!(
-        ProcessId::current(),
-        "🌐 WebServer starting on port {} (API: {})",
-        args.port,
-        args.api_port
-    );
+    // Test that ProcessId is working
+    process_info!(ProcessId::current(), "🚀 WebServer ProcessId initialized successfully");
+
+    if let Some(listen_port) = args.listen_port {
+        process_info!(
+            ProcessId::current(),
+            "🌐 WebServer starting on HTTP port {} (IPC listen: {})",
+            args.port,
+            listen_port
+        );
+    } else {
+        process_info!(
+            ProcessId::current(),
+            "🌐 WebServer starting on HTTP port {} (standalone mode)",
+            args.port
+        );
+    }
 
     // Create service addresses matching ProcessManager expectations
     let http_addr: SocketAddr = format!("127.0.0.1:{}", args.port)
@@ -82,22 +93,30 @@ async fn main() -> WebServerResult<()> {
         );
         RealOrchestratorClient::new_standalone()
     } else {
-        let api_addr: SocketAddr = format!("127.0.0.1:{}", args.api_port)
-            .parse()
-            .map_err(|e| webserver::WebServerError::config(format!("Invalid API port: {}", e)))?;
-
         let orchestrator_addr: SocketAddr = args
             .orchestrator_addr
             .unwrap()
             .parse()
             .map_err(|e| webserver::WebServerError::config(format!("Invalid orchestrator address: {}", e)))?;
 
-        process_info!(
-            ProcessId::current(),
-            "🔗 Starting with orchestrator connection to {}",
-            orchestrator_addr
-        );
-        RealOrchestratorClient::new(api_addr, orchestrator_addr)
+        if let Some(listen_port) = args.listen_port {
+            // IPC mode with orchestrator (standardized like producers)
+            let listen_addr: SocketAddr = format!("127.0.0.1:{}", listen_port)
+                .parse()
+                .map_err(|e| webserver::WebServerError::config(format!("Invalid listen port: {}", e)))?;
+            
+            process_info!(
+                ProcessId::current(),
+                "🔗 Starting with orchestrator IPC connection: listen on {}, connect to {}",
+                listen_addr,
+                orchestrator_addr
+            );
+            RealOrchestratorClient::new(listen_addr, orchestrator_addr)
+        } else {
+            return Err(webserver::WebServerError::config(
+                "Listen port required when orchestrator address is provided. Use --listen-port.".to_string()
+            ));
+        }
     };
 
     let websocket_manager = RealWebSocketManager::new();

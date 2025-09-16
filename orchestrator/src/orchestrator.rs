@@ -212,7 +212,10 @@ where
                 // Periodic metrics collection and optimization
                 _ = metrics_interval.tick() => {
                     if let Err(e) = self.collect_and_send_metrics().await {
-                        process_error!(ProcessId::current(), "⚠️ Error collecting metrics: {}", e);
+                        process_error!(ProcessId::current(), "⚠️ Error collecting metrics: {}. Will retry on next interval.", e);
+                        
+                        // Log current webserver connection status for debugging
+                        process_debug!(ProcessId::current(), "📊 Metrics interval continuing despite communication error");
                     }
                 },
 
@@ -916,9 +919,9 @@ where
             (metrics, active_producers, current_topic, total_unique)
         };
 
-        // Send statistics update to webserver
-        {
-            process_debug!(ProcessId::current(), "📊 Sending StatisticsUpdate: UAM={:.2}, cost/min=${:.4}", 
+        // Send statistics update to webserver only when topic is active
+        if current_topic.is_some() && active_producers > 0 {
+            process_debug!(ProcessId::current(), "📊 Sending StatisticsUpdate: UAM={:.2}, cost/min=${:.4} (topic active)", 
                           metrics.uam, metrics.cost_per_minute);
             
             let update = OrchestratorUpdate::StatisticsUpdate {
@@ -930,6 +933,9 @@ where
             };
             
             self.communicator.send_webserver_update(update).await?;
+        } else {
+            process_debug!(ProcessId::current(), "📭 Skipping StatisticsUpdate: no active topic (topic: {:?}, producers: {})", 
+                          current_topic.as_deref().unwrap_or("None"), active_producers);
         }
 
         Ok(())
@@ -938,10 +944,15 @@ where
     /// Perform periodic health checks and restart failed producers
     async fn perform_health_checks(&self) -> OrchestratorResult<()> {
         process_debug!(ProcessId::current(), "🔍 Checking producer pool health");
+        
+        // Also check webserver connection health by sending a test statistics update
+        self.test_webserver_connection().await;
 
         let health_infos = self.process_manager.check_process_health().await?;
 
         let mut failed_producers = Vec::new();
+        let mut webserver_failed = false;
+        
         for health_info in &health_infos {
             if health_info.status == ProcessStatus::Failed {
                 if let Some(producer_id) = &health_info.producer_id {
@@ -953,6 +964,10 @@ where
                         let mut state = self.state.lock().await;
                         state.update_producer_status(producer_id.clone(), ProcessStatus::Failed);
                     }
+                } else {
+                    // This is the webserver
+                    process_error!(ProcessId::current(), "🔥 WebServer has failed");
+                    webserver_failed = true;
                 }
             }
         }
@@ -989,6 +1004,27 @@ where
                     failed_producers.len()
                 ));
                 self.communicator.send_webserver_update(status_update).await?;
+            }
+        }
+
+        // Restart failed webserver
+        if webserver_failed {
+            process_info!(
+                ProcessId::current(),
+                "🔄 Healing webserver: restarting failed webserver"
+            );
+            
+            if let Err(e) = self.restart_failed_webserver().await {
+                process_error!(
+                    ProcessId::current(),
+                    "❌ Failed to restart webserver: {}",
+                    e
+                );
+            } else {
+                process_info!(
+                    ProcessId::current(),
+                    "✅ WebServer successfully restarted"
+                );
             }
         }
 
@@ -1059,6 +1095,35 @@ where
         Ok(())
     }
 
+    /// Restart a failed webserver (self-healing)
+    async fn restart_failed_webserver(&self) -> OrchestratorResult<()> {
+        process_info!(ProcessId::current(), "🔄 Restarting failed webserver");
+
+        // Get the webserver address for spawning
+        let webserver_addr = self.webserver_addr.expect("WebServer address not initialized");
+        
+        // Spawn a replacement webserver
+        let webserver_info = self
+            .process_manager
+            .spawn_webserver(8080, webserver_addr) // Use standard HTTP port
+            .await?;
+
+        // Update orchestrator to register the new webserver
+        self.communicator
+            .register_webserver(webserver_info.api_address)
+            .await?;
+
+        process_info!(
+            ProcessId::current(),
+            "🌐 Spawned replacement webserver (PID: {}) HTTP:{} IPC:{}",
+            webserver_info.process_id,
+            webserver_info.listen_address.port(),
+            webserver_info.api_address.port()
+        );
+
+        Ok(())
+    }
+
     /// Graceful shutdown
     async fn shutdown(&self) -> OrchestratorResult<()> {
         process_debug!(ProcessId::current(), "🛑 Starting graceful shutdown...");
@@ -1107,5 +1172,35 @@ where
     /// Get shutdown sender for external shutdown requests
     pub fn get_shutdown_sender(&self) -> mpsc::Sender<()> {
         self.shutdown_tx.clone()
+    }
+
+    /// Test webserver connection health and attempt to restore if needed
+    async fn test_webserver_connection(&self) {
+        // Only test connection if we have an active topic that would need to send updates
+        let has_active_topic = {
+            let state = self.state.lock().await;
+            state.context.topic.is_some() && state.get_active_producer_count() > 0
+        };
+        
+        if !has_active_topic {
+            process_debug!(ProcessId::current(), "🔌 Skipping webserver connection test: no active topic");
+            return;
+        }
+        
+        // Try to send a minimal ping-style update to test the connection
+        let ping_update = OrchestratorUpdate::ErrorNotification(
+            "ping_test".to_string()
+        );
+        
+        match self.communicator.send_webserver_update(ping_update).await {
+            Ok(()) => {
+                process_debug!(ProcessId::current(), "✅ Webserver connection healthy");
+            }
+            Err(e) => {
+                process_error!(ProcessId::current(), "⚠️ Webserver connection test failed: {}", e);
+                // The communicator will have marked webserver as not ready
+                // Future connections will be re-established when webserver reconnects
+            }
+        }
     }
 }

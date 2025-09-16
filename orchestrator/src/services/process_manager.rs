@@ -258,8 +258,8 @@ impl ProcessManager for RealProcessManager {
     }
 
     async fn spawn_webserver(&self, port: u16, orchestrator_addr: SocketAddr) -> OrchestratorResult<WebServerInfo> {
-        // Use 6000 range for internal IPC communication
-        let api_port = 6002; // Fixed API port for internal communication
+        // Use 6000 range for internal IPC communication (standardized like producers)
+        let listen_port = 6003; // Fixed listen port for receiving orchestrator updates (like producers)
 
         // Determine the working directory (assume we're in project root)
         let current_dir = std::env::current_dir()
@@ -273,8 +273,8 @@ impl ProcessManager for RealProcessManager {
             .arg("--")
             .arg("--port")
             .arg(port.to_string())
-            .arg("--api-port")
-            .arg(api_port.to_string())
+            .arg("--listen-port")
+            .arg(listen_port.to_string())
             .arg("--orchestrator-addr")
             .arg(orchestrator_addr.to_string())
             .arg("--static-dir")
@@ -298,16 +298,16 @@ impl ProcessManager for RealProcessManager {
 
         let info = ProcessInfo {
             process_id,
-            listen_address: SocketAddr::from(([127, 0, 0, 1], port)),
-            command_address: SocketAddr::from(([127, 0, 0, 1], api_port)),
+            listen_address: SocketAddr::from(([127, 0, 0, 1], port)), // HTTP port for browsers
+            command_address: SocketAddr::from(([127, 0, 0, 1], listen_port)), // IPC port for orchestrator updates
             start_time: std::time::Instant::now(),
             process_type: ProcessType::WebServer,
         };
 
         let webserver_info = WebServerInfo {
             process_id,
-            listen_address: info.listen_address,
-            api_address: SocketAddr::from(([127, 0, 0, 1], api_port)), // Use fixed 6002 port
+            listen_address: info.listen_address, // HTTP port
+            api_address: SocketAddr::from(([127, 0, 0, 1], listen_port)), // IPC listen port (standardized like producers)
         };
 
         // Store active webserver
@@ -318,10 +318,10 @@ impl ProcessManager for RealProcessManager {
 
         process_debug!(
             shared::ProcessId::current(),
-            "🌐 Spawned webserver (PID: {}) HTTP:{} API:{}",
+            "🌐 Spawned webserver (PID: {}) HTTP:{} IPC:{}",
             process_id,
             port,
-            api_port
+            listen_port
         );
         Ok(webserver_info)
     }

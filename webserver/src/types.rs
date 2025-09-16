@@ -8,29 +8,6 @@ use uuid::Uuid;
 use shared::messages::webserver::CompletionReason;
 use shared::{OrchestratorUpdate, ProcessId, ProviderMetadata, SystemMetrics};
 
-/// WebServer configuration
-#[derive(Debug, Clone)]
-pub struct WebServerConfig {
-    pub process_id: ProcessId,
-    pub http_port: u16,
-    pub api_port: u16,
-    pub static_dir: String,
-    pub orchestrator_addr: std::net::SocketAddr,
-    pub standalone_mode: bool,
-}
-
-impl WebServerConfig {
-    pub fn new(http_port: u16, api_port: u16, orchestrator_addr: std::net::SocketAddr) -> Self {
-        Self {
-            process_id: ProcessId::WebServer, // Will be overridden by singleton
-            http_port,
-            api_port,
-            static_dir: "./static".to_string(),
-            orchestrator_addr,
-            standalone_mode: false,
-        }
-    }
-}
 
 /// Client session information
 #[derive(Debug, Clone)]
