@@ -26,6 +26,11 @@ The system consists of:
 - **WebServer**: Real-time web interface for monitoring and control
 - **Tester**: End-to-end testing framework using distributed tracing
 
+## Bugs/Unfinished Work
+
+1. The OpenAI API key does not work, so I have not yet been able to test against a real LLM.
+2. The websocket stops updating the browser after a while, although the orchestrator continues to send messages. Working on fixing this issue.
+
 ## Quick Start
 
 ### 1. Build the System
