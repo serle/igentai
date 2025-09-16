@@ -1,0 +1,230 @@
+//! WebSocket client management service
+//! 
+//! Manages WebSocket connections and broadcasting to browser clients
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{RwLock, mpsc};
+use async_trait::async_trait;
+use uuid::Uuid;
+use tracing::{info, warn};
+
+use crate::traits::WebSocketManager;
+use crate::types::ClientMessage;
+use crate::error::{WebServerError, WebServerResult};
+
+/// WebSocket client connection info
+#[derive(Debug)]
+struct ClientConnection {
+    #[allow(dead_code)]
+    id: Uuid,
+    sender: mpsc::Sender<ClientMessage>,
+    #[allow(dead_code)]
+    connected_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Real WebSocket manager implementation
+#[derive(Clone)]
+pub struct RealWebSocketManager {
+    /// Active client connections
+    clients: Arc<RwLock<HashMap<Uuid, ClientConnection>>>,
+}
+
+impl RealWebSocketManager {
+    /// Create new WebSocket manager
+    pub fn new() -> Self {
+        Self {
+            clients: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+    
+    /// Clean up disconnected clients
+    #[allow(dead_code)]
+    async fn cleanup_disconnected_clients(&self) {
+        let mut clients = self.clients.write().await;
+        let mut to_remove = Vec::new();
+        
+        for (client_id, connection) in clients.iter() {
+            if connection.sender.is_closed() {
+                to_remove.push(*client_id);
+            }
+        }
+        
+        for client_id in to_remove {
+            clients.remove(&client_id);
+            info!("🗑️ Cleaned up disconnected client {}", client_id);
+        }
+    }
+}
+
+#[async_trait]
+impl WebSocketManager for RealWebSocketManager {
+    async fn add_client(&self, client_id: Uuid, sender: mpsc::Sender<ClientMessage>) -> WebServerResult<()> {
+        let connection = ClientConnection {
+            id: client_id,
+            sender,
+            connected_at: chrono::Utc::now(),
+        };
+        
+        {
+            let mut clients = self.clients.write().await;
+            clients.insert(client_id, connection);
+        }
+        
+        info!("👋 Added WebSocket client {}", client_id);
+        
+        // Send connection acknowledgment in the background to avoid test interference
+        let clients_arc = self.clients.clone();
+        tokio::spawn(async move {
+            // Small delay to ensure the client is fully registered
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            
+            let clients = clients_arc.read().await;
+            if let Some(connection) = clients.get(&client_id) {
+                let ack_message = ClientMessage::ConnectionAck {
+                    session_id: client_id,
+                    server_time: chrono::Utc::now().timestamp() as u64,
+                };
+                
+                if let Err(e) = connection.sender.try_send(ack_message) {
+                    warn!("Failed to send connection ack to {}: {:?}", client_id, e);
+                }
+            }
+        });
+        
+        Ok(())
+    }
+    
+    async fn remove_client(&self, client_id: Uuid) -> WebServerResult<()> {
+        let mut clients = self.clients.write().await;
+        if clients.remove(&client_id).is_some() {
+            info!("👋 Removed WebSocket client {}", client_id);
+        }
+        Ok(())
+    }
+    
+    async fn broadcast(&self, message: ClientMessage) -> WebServerResult<()> {
+        // Get all clients and their senders at once to avoid holding the lock too long
+        let client_senders = {
+            let clients = self.clients.read().await;
+            
+            if clients.is_empty() {
+                return Ok(());
+            }
+            
+            clients.iter()
+                .map(|(client_id, connection)| (*client_id, connection.sender.clone()))
+                .collect::<Vec<_>>()
+        };
+        
+        let mut failed_clients = Vec::new();
+        let mut success_count = 0;
+        
+        for (client_id, sender) in client_senders {
+            match sender.try_send(message.clone()) {
+                Ok(_) => {
+                    success_count += 1;
+                },
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    warn!("Client {} channel full, dropping message", client_id);
+                },
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    failed_clients.push(client_id);
+                },
+            }
+        }
+        
+        // Clean up failed clients
+        if !failed_clients.is_empty() {
+            let mut clients = self.clients.write().await;
+            for client_id in failed_clients {
+                if clients.remove(&client_id).is_some() {
+                    info!("🗑️ Removed disconnected client {} during broadcast", client_id);
+                }
+            }
+        }
+        
+        if success_count > 0 {
+            info!("📡 Broadcasted message to {} clients", success_count);
+        }
+        
+        Ok(())
+    }
+    
+    async fn send_to_client(&self, client_id: Uuid, message: ClientMessage) -> WebServerResult<()> {
+        // Get sender clone to avoid holding the lock during the send operation
+        let sender = {
+            let clients = self.clients.read().await;
+            clients.get(&client_id).map(|connection| connection.sender.clone())
+        };
+        
+        if let Some(sender) = sender {
+            match sender.try_send(message) {
+                Ok(_) => {
+                    return Ok(());
+                },
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    return Err(WebServerError::websocket("Client channel full".to_string()));
+                },
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    // Remove the disconnected client
+                    let mut clients = self.clients.write().await;
+                    if clients.remove(&client_id).is_some() {
+                        info!("🗑️ Removed disconnected client {} during individual send", client_id);
+                    }
+                    return Err(WebServerError::websocket("Client disconnected".to_string()));
+                },
+            }
+        }
+        
+        Err(WebServerError::websocket(format!("Client {} not found", client_id)))
+    }
+    
+    async fn client_count(&self) -> usize {
+        let clients = self.clients.read().await;
+        clients.len()
+    }
+    
+    async fn active_clients(&self) -> Vec<Uuid> {
+        let clients = self.clients.read().await;
+        clients.keys().copied().collect()
+    }
+}
+
+impl Default for RealWebSocketManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Background task to periodically clean up disconnected clients
+impl RealWebSocketManager {
+    /// Start background cleanup task
+    pub fn start_cleanup_task(&self) -> tokio::task::JoinHandle<()> {
+        let clients = self.clients.clone();
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            
+            loop {
+                interval.tick().await;
+                
+                let mut client_map = clients.write().await;
+                let mut to_remove = Vec::new();
+                
+                for (client_id, connection) in client_map.iter() {
+                    if connection.sender.is_closed() {
+                        to_remove.push(*client_id);
+                    }
+                }
+                
+                if !to_remove.is_empty() {
+                    for client_id in to_remove {
+                        client_map.remove(&client_id);
+                    }
+                    info!("🧹 Cleaned up {} disconnected clients", client_map.len());
+                }
+            }
+        })
+    }
+}

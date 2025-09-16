@@ -9,9 +9,15 @@ serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+reqwest = { workspace = true, features = ["json"] }
+tokio = { workspace = true, features = ["sync"] }
 
-# For bloom filter (optional, Phase 2)
+# For bloom filter support in orchestrator
 bloom = { version = "0.3", optional = true }
+bincode = { version = "1.3", optional = true }
 
 [features]
-bloom-filter = ["bloom"]
+default = []
+bloom-filter = ["bloom", "bincode"]

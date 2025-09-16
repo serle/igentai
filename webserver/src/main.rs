@@ -1,103 +1,123 @@
-//! Webserver binary
-//!
-//! This is the main entry point for the webserver application.
+//! WebServer child process entry point
+//! 
+//! Started by orchestrator's ProcessManager with specific command line arguments
+//! Aligns with ProcessManager::spawn_webserver() expectations
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
+use tokio::signal;
 use clap::Parser;
-use tracing::{info, error};
-use tracing_subscriber;
+use shared::{ProcessId, logging, process_info};
 
 use webserver::{
-    webserver_impl::WebServer,
+    core::{WebServerState, AnalyticsEngine},
     services::{
-        RealFileManager, RealClientBroadcaster, RealIpcCommunicator,
-        RealClientRegistry, RealMetricsAggregator,
+        RealOrchestratorClient,
+        RealWebSocketManager,
+        RealStaticFileServer,
     },
-    state::WebServerState,
+    WebServer,
+    WebServerResult,
 };
 
+/// Command line arguments expected from ProcessManager
 #[derive(Parser, Debug)]
 #[command(name = "webserver")]
-#[command(about = "Web dashboard server for the LLM orchestrator")]
+#[command(about = "WebServer process spawned by orchestrator")]
 struct Args {
-    /// Bind address for the web server
-    #[arg(short, long, default_value = "127.0.0.1")]
-    host: String,
-
-    /// Port for the web server
-    #[arg(short, long, default_value_t = 3000)]
+    /// Port for HTTP server (browser connections)
+    #[arg(long, default_value = "8080")]
     port: u16,
-
-    /// Orchestrator address
-    #[arg(long, default_value = "127.0.0.1")]
-    orchestrator_host: String,
-
-    /// Orchestrator port
-    #[arg(long, default_value_t = 8080)]
-    orchestrator_port: u16,
-
-    /// Enable debug logging
-    #[arg(short, long)]
-    debug: bool,
+    
+    /// Tracing endpoint URL (if set, traces will be sent here)
+    #[arg(long)]
+    trace_ep: Option<String>,
+    
+    /// Log level (trace, debug, info, warn, error)
+    #[arg(long, default_value = "info")]
+    log_level: String,
+    
+    /// Port for API/IPC communication (internal communication)
+    #[arg(long, default_value = "6002")]
+    api_port: u16,
+    
+    /// Static files directory
+    #[arg(long, default_value = "./static")]
+    static_dir: String,
+    
+    /// Orchestrator address for IPC (if not provided, runs in standalone mode)
+    #[arg(long)]
+    orchestrator_addr: Option<String>,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> WebServerResult<()> {
+    // Parse arguments from ProcessManager spawn
     let args = Args::parse();
-
-    // Initialize tracing
-    let subscriber = if args.debug {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .finish()
+    
+    // Initialize process ID singleton for webserver
+    ProcessId::init_webserver();
+    
+    // Initialize tracing with optional endpoint and log level
+    let trace_endpoint = args.trace_ep.as_ref().map(|url| shared::logging::TracingEndpoint::new(url.clone()));
+    shared::logging::init_tracing_with_endpoint_and_level(trace_endpoint, Some(&args.log_level));
+    
+    process_info!(ProcessId::current(), "🌐 WebServer starting on port {} (API: {})", args.port, args.api_port);
+    
+    // Create service addresses matching ProcessManager expectations
+    let http_addr: SocketAddr = format!("127.0.0.1:{}", args.port).parse()
+        .map_err(|e| webserver::WebServerError::config(format!("Invalid port: {}", e)))?;
+        
+    // Determine if running in standalone mode
+    let standalone_mode = args.orchestrator_addr.is_none();
+    
+    // Initialize services with dependency injection
+    let orchestrator_client = if standalone_mode {
+        process_info!(ProcessId::current(), "🔧 Starting in standalone mode (no orchestrator connection)");
+        RealOrchestratorClient::new_standalone()
     } else {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .finish()
+        let api_addr: SocketAddr = format!("127.0.0.1:{}", args.api_port).parse()
+            .map_err(|e| webserver::WebServerError::config(format!("Invalid API port: {}", e)))?;
+            
+        let orchestrator_addr: SocketAddr = args.orchestrator_addr.unwrap().parse()
+            .map_err(|e| webserver::WebServerError::config(format!("Invalid orchestrator address: {}", e)))?;
+        
+        process_info!(ProcessId::current(), "🔗 Starting with orchestrator connection to {}", orchestrator_addr);
+        RealOrchestratorClient::new(api_addr, orchestrator_addr)
     };
-    tracing::subscriber::set_global_default(subscriber)?;
-
-    // Parse addresses
-    let bind_addr = SocketAddr::new(
-        args.host.parse().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-        args.port,
+    
+    let websocket_manager = RealWebSocketManager::new();
+    let static_server = RealStaticFileServer::new(args.static_dir);
+    
+    // Initialize core business logic
+    let state = WebServerState::new();
+    let analytics = AnalyticsEngine::new();
+    
+    // Create webserver with injected dependencies
+    let mut webserver = WebServer::new(
+        state,
+        analytics,
+        orchestrator_client,
+        websocket_manager,
+        static_server,
     );
-
-    let orchestrator_addr = SocketAddr::new(
-        args.orchestrator_host.parse().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-        args.orchestrator_port,
-    );
-
-    info!("🚀 Starting webserver on {}", bind_addr);
-    info!("🎯 Will connect to orchestrator at {}", orchestrator_addr);
-
-    // Create state
-    let state = std::sync::Arc::new(WebServerState::new(bind_addr, orchestrator_addr));
-
-    // Create service implementations
-    let file_manager = RealFileManager::new();
-    let client_broadcaster = RealClientBroadcaster::new(state.clone());
-    let ipc_communicator = RealIpcCommunicator::new(state.clone());
-    let client_registry = RealClientRegistry::new(state.clone());
-    let metrics_aggregator = RealMetricsAggregator::new(state.clone());
-
-    // Create webserver with dependency injection
-    let webserver = WebServer::new(
-        bind_addr,
-        orchestrator_addr,
-        file_manager,
-        client_broadcaster,
-        ipc_communicator,
-        client_registry,
-        metrics_aggregator,
-    );
-
-    // Start the server
-    if let Err(e) = webserver.run().await {
-        error!("❌ Server error: {}", e);
-        return Err(e.into());
-    }
-
-    info!("👋 Webserver shut down gracefully");
+    
+    // Set up graceful shutdown
+    let shutdown_sender = webserver.get_shutdown_sender();
+    tokio::spawn(async move {
+        match signal::ctrl_c().await {
+            Ok(()) => {
+                logging::log_shutdown(ProcessId::current(), "Received Ctrl+C signal");
+                let _ = shutdown_sender.send(()).await;
+            }
+            Err(err) => {
+                logging::log_error(ProcessId::current(), "Signal handling", &err);
+            }
+        }
+    });
+    
+    // Start webserver (standalone mode detected automatically)
+    webserver.run(http_addr, standalone_mode).await?;
+    
+    logging::log_success(ProcessId::current(), "WebServer stopped gracefully");
     Ok(())
 }

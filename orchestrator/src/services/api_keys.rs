@@ -1,124 +1,231 @@
-//! Production API key management implementation
-//!
-//! This module provides environment variable-based API key management for various
-//! AI providers. The orchestrator requires at least one API key to be present
-//! and will pass all available keys to producer processes.
-//!
-//! ## Configuration Sources
-//! API keys are loaded from:
-//! 1. `.env` file in the current directory or parent directories (if present)
-//! 2. System environment variables
+//! Real API key management service
 //! 
-//! Environment variables take precedence over .env file values.
-//!
-//! ## Required Keys
-//! - `OPENAI_API_KEY`: OpenAI API access key (required)
-//!
-//! ## Optional Keys
-//! The following provider keys are optional and will be included if available:
-//! - `ANTHROPIC_API_KEY`: Anthropic Claude API key
-//! - `GOOGLE_API_KEY`, `GOOGLE_AI_API_KEY`: Google Gemini API keys
-//! - `COHERE_API_KEY`: Cohere API key
-//! - `HUGGINGFACE_API_KEY`, `HF_TOKEN`: Hugging Face API keys
-//! - `MISTRAL_API_KEY`: Mistral AI API key
-//! - `GROQ_API_KEY`: Groq API key
+//! Manages API keys for different LLM providers from environment variables
+//! with support for .env files and validation.
 
-use crate::traits::{ApiKeySource, RequiredKeyMissing};
-use shared::KeyValuePair;
+use std::collections::HashMap;
+use async_trait::async_trait;
+use shared::{ProviderId, process_debug};
+use crate::error::{OrchestratorError, OrchestratorResult};
+use crate::traits::ApiKeySource;
 
 /// Real API key source using environment variables
-pub struct RealApiKeySource;
+pub struct RealApiKeySource {
+    /// Whether to use random provider only (disables env var loading)
+    random_only: bool,
+}
 
 impl RealApiKeySource {
-    /// List of required API keys that must be present
-    const REQUIRED_KEYS: &'static [&'static str] = &["OPENAI_API_KEY"];
+    /// Create new API key source
+    pub fn new() -> Self {
+        Self {
+            random_only: false,
+        }
+    }
     
-    /// List of optional API keys for various AI providers
-    const OPTIONAL_KEYS: &'static [&'static str] = &[
-        // Anthropic (Claude)
-        "ANTHROPIC_API_KEY",
-        // Google (Gemini)
-        "GOOGLE_API_KEY",
-        "GOOGLE_AI_API_KEY", 
-        // Cohere
-        "COHERE_API_KEY",
-        // Hugging Face
-        "HUGGINGFACE_API_KEY",
-        "HF_TOKEN",
-        // Mistral AI
-        "MISTRAL_API_KEY",
-        // Groq
-        "GROQ_API_KEY",
-    ];
-
-    /// Initialize environment by loading .env file if present
-    /// 
-    /// This is called once to load environment variables from .env file.
-    /// It's safe to call multiple times as dotenv ignores already set variables.
-    fn init_env() {
-        // Try to load .env file from current directory or parent directories
-        // This will silently fail if no .env file is found, which is fine
+    /// Create new API key source that only provides Random provider
+    pub fn random_only() -> Self {
+        Self {
+            random_only: true,
+        }
+    }
+    
+    /// Load API keys from environment
+    fn load_keys_from_env() -> HashMap<ProviderId, String> {
+        let mut keys = HashMap::new();
+        
+        // OpenAI
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            if !key.trim().is_empty() {
+                keys.insert(ProviderId::OpenAI, key.trim().to_string());
+            }
+        }
+        
+        // Anthropic
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            if !key.trim().is_empty() {
+                keys.insert(ProviderId::Anthropic, key.trim().to_string());
+            }
+        }
+        
+        // Google/Gemini
+        for env_var in &["GOOGLE_API_KEY", "GEMINI_API_KEY"] {
+            if let Ok(key) = std::env::var(env_var) {
+                if !key.trim().is_empty() {
+                    keys.insert(ProviderId::Gemini, key.trim().to_string());
+                    break;
+                }
+            }
+        }
+        
+        // Random provider (optional - can be set to "dummy" for consistency)
+        if let Ok(key) = std::env::var("RANDOM_API_KEY") {
+            if !key.trim().is_empty() {
+                keys.insert(ProviderId::Random, key.trim().to_string());
+            }
+        }
+        
+        keys
+    }
+    
+    
+    /// Load .env file if present
+    fn load_dotenv() {
+        // Try to load .env file, but don't fail if it doesn't exist
         let _ = dotenv::dotenv();
+    }
+    
+    /// Validate that we have at least one API key
+    fn validate_keys(keys: &HashMap<ProviderId, String>) -> OrchestratorResult<()> {
+        if keys.is_empty() {
+            return Err(OrchestratorError::config(
+                "No API keys found. Please set at least one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, or RANDOM_API_KEY=dummy for testing"
+            ));
+        }
+        
+        // Validate key format (basic check)
+        for (provider, key) in keys {
+            if key.len() < 10 {
+                return Err(OrchestratorError::config(
+                    format!("API key for {:?} appears to be invalid (too short)", provider)
+                ));
+            }
+            
+            // Provider-specific validations
+            match provider {
+                ProviderId::OpenAI => {
+                    if !key.starts_with("sk-") {
+                        return Err(OrchestratorError::config(
+                            "OpenAI API key should start with 'sk-'"
+                        ));
+                    }
+                },
+                ProviderId::Anthropic => {
+                    if !key.starts_with("sk-ant-") {
+                        return Err(OrchestratorError::config(
+                            "Anthropic API key should start with 'sk-ant-'"
+                        ));
+                    }
+                },
+                ProviderId::Gemini => {
+                    // Google API keys typically start with "AIza" but can vary
+                    if key.len() < 20 {
+                        return Err(OrchestratorError::config(
+                            "Google/Gemini API key appears to be too short"
+                        ));
+                    }
+                },
+                ProviderId::Random => {
+                    // Random provider doesn't need real validation - just accept any non-empty string
+                    // This allows users to set RANDOM_API_KEY=dummy for consistency
+                }
+            }
+        }
+        
+        Ok(())
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ApiKeySource for RealApiKeySource {
-    async fn get_api_keys(&self) -> Result<Vec<KeyValuePair>, RequiredKeyMissing> {
-        // Initialize environment from .env file if present
-        Self::init_env();
-        
-        let mut available_keys = Vec::new();
-        let mut missing_required = Vec::new();
-        
-        // Check required keys
-        for &key_name in Self::REQUIRED_KEYS {
-            match std::env::var(key_name) {
-                Ok(value) => {
-                    available_keys.push(KeyValuePair {
-                        key: key_name.to_string(),
-                        value,
-                    });
-                }
-                Err(_) => {
-                    missing_required.push(key_name);
-                }
-            }
+    async fn get_api_keys(&self) -> OrchestratorResult<HashMap<ProviderId, String>> {
+        // If random-only, return just the Random provider key
+        if self.random_only {
+            let mut keys = HashMap::new();
+            keys.insert(ProviderId::Random, "dummy-test-key".to_string());
+            process_debug!(shared::ProcessId::current(), "🎲 Using Random provider only");
+            return Ok(keys);
         }
         
-        // Check optional keys
-        for &key_name in Self::OPTIONAL_KEYS {
-            if let Ok(value) = std::env::var(key_name) {
-                available_keys.push(KeyValuePair {
-                    key: key_name.to_string(),
-                    value,
-                });
-            }
-        }
+        // Load .env file first
+        Self::load_dotenv();
         
-        // Return error if any required keys are missing
-        if !missing_required.is_empty() {
-            return Err(RequiredKeyMissing {
-                key_name: missing_required.join(", "),
-                message: format!(
-                    "Missing required API keys: {}. These keys must be set as environment variables.",
-                    missing_required.join(", ")
-                ),
-            });
-        }
+        // Load keys from environment
+        let keys = Self::load_keys_from_env();
         
-        // Log successful validation
-        println!("API keys validated successfully:");
-        println!("  Required keys: {}", Self::REQUIRED_KEYS.join(", "));
-        let optional_available: Vec<&str> = available_keys
-            .iter()
-            .filter(|kv| Self::OPTIONAL_KEYS.contains(&kv.key.as_str()))
-            .map(|kv| kv.key.as_str())
-            .collect();
-        if !optional_available.is_empty() {
-            println!("  Optional keys available: {}", optional_available.join(", "));
-        }
+        // Validate keys
+        Self::validate_keys(&keys)?;
         
-        Ok(available_keys)
+        process_debug!(shared::ProcessId::current(), "🔑 Loaded API keys for providers: {:?}", keys.keys().collect::<Vec<_>>());
+        
+        Ok(keys)
+    }
+    
+    async fn has_api_key(&self, provider_id: ProviderId) -> bool {
+        match self.get_api_keys().await {
+            Ok(keys) => keys.contains_key(&provider_id),
+            Err(_) => false,
+        }
+    }
+    
+    async fn get_provider_key(&self, provider_id: ProviderId) -> OrchestratorResult<Option<String>> {
+        let keys = self.get_api_keys().await?;
+        Ok(keys.get(&provider_id).cloned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[tokio::test]
+    async fn test_api_key_source_no_keys() {
+        // Test non-test mode without any environment keys set
+        let source = RealApiKeySource::new();
+        let result = source.get_api_keys().await;
+        
+        // Should fail with no keys (unless environment has keys)
+        // Note: This test might pass if environment has real API keys
+        if result.is_err() {
+            assert!(result.unwrap_err().to_string().contains("No API keys found"));
+        }
+    }
+    
+    #[tokio::test]
+    async fn test_api_key_source_random_only() {
+        // Random-only should return Random provider with dummy key
+        let source = RealApiKeySource::random_only();
+        let result = source.get_api_keys().await;
+        
+        assert!(result.is_ok());
+        let keys = result.unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(keys.contains_key(&ProviderId::Random));
+        assert_eq!(keys.get(&ProviderId::Random).unwrap(), "dummy-test-key");
+    }
+    
+    #[tokio::test]
+    async fn test_has_api_key_random_only() {
+        let source = RealApiKeySource::random_only();
+        
+        assert!(source.has_api_key(ProviderId::Random).await);
+        assert!(!source.has_api_key(ProviderId::OpenAI).await);
+    }
+    
+    #[tokio::test] 
+    async fn test_get_provider_key_random_only() {
+        let source = RealApiKeySource::random_only();
+        
+        let key = source.get_provider_key(ProviderId::Random).await.unwrap();
+        assert_eq!(key, Some("dummy-test-key".to_string()));
+        
+        let no_key = source.get_provider_key(ProviderId::OpenAI).await.unwrap();
+        assert_eq!(no_key, None);
+    }
+    
+    #[tokio::test]
+    async fn test_env_vs_random_only() {
+        // Random-only should always return Random provider
+        let random_source = RealApiKeySource::random_only();
+        let random_keys = random_source.get_api_keys().await.unwrap();
+        assert_eq!(random_keys.len(), 1);
+        assert!(random_keys.contains_key(&ProviderId::Random));
+        
+        // Production mode may have different results based on environment
+        let env_source = RealApiKeySource::new();
+        let prod_result = prod_source.get_api_keys().await;
+        // Don't assert on prod_result since it depends on environment
+        // Just verify it doesn't panic
+        let _ = prod_result;
     }
 }

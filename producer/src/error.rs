@@ -1,7 +1,6 @@
-//! Producer error types
+//! Producer error types and result handling
 
 use thiserror::Error;
-use shared::ApiFailure;
 
 /// Result type for producer operations
 pub type ProducerResult<T> = Result<T, ProducerError>;
@@ -12,21 +11,68 @@ pub enum ProducerError {
     #[error("IPC communication error: {message}")]
     IpcError { message: String },
 
-    #[error("Provider request failed: {provider} - {reason:?}")]
-    ProviderError { provider: String, reason: ApiFailure },
+    #[error("API provider error for {provider}: {reason}")]
+    ApiError { provider: String, reason: String },
 
-    #[error("Serialization error: {message}")]
-    SerializationError { message: String },
+    #[error("Processing error: {message}")]
+    ProcessingError { message: String },
 
     #[error("Configuration error: {message}")]
     ConfigError { message: String },
 
-    #[error("Bloom filter error: {message}")]
-    BloomFilterError { message: String },
+    #[error("Serialization error: {message}")]
+    SerializationError { message: String },
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
-    #[error("Task join error: {0}")]
+    #[error("Join error: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+
+    #[error("Request error: {0}")]
+    RequestError(#[from] reqwest::Error),
+
+    #[error("JSON error: {0}")]
+    JsonError(#[from] serde_json::Error),
+
+    #[error("Bincode error: {0}")]
+    BincodeError(#[from] bincode::Error),
+}
+
+impl ProducerError {
+    /// Create IPC error
+    pub fn ipc<S: Into<String>>(message: S) -> Self {
+        Self::IpcError {
+            message: message.into(),
+        }
+    }
+
+    /// Create API error
+    pub fn api<S1: Into<String>, S2: Into<String>>(provider: S1, reason: S2) -> Self {
+        Self::ApiError {
+            provider: provider.into(),
+            reason: reason.into(),
+        }
+    }
+
+    /// Create processing error
+    pub fn processing<S: Into<String>>(message: S) -> Self {
+        Self::ProcessingError {
+            message: message.into(),
+        }
+    }
+
+    /// Create configuration error
+    pub fn config<S: Into<String>>(message: S) -> Self {
+        Self::ConfigError {
+            message: message.into(),
+        }
+    }
+
+    /// Create serialization error
+    pub fn serialization<S: Into<String>>(message: S) -> Self {
+        Self::SerializationError {
+            message: message.into(),
+        }
+    }
 }

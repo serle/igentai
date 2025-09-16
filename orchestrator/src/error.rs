@@ -1,52 +1,76 @@
-//! Orchestrator-specific error types
+//! Error types for the orchestrator
 
 use thiserror::Error;
-use std::time::Duration;
-use shared::SharedError;
 
 #[derive(Error, Debug)]
 pub enum OrchestratorError {
-    #[error("Failed to spawn producer process: {producer_id}")]
-    ProducerSpawnFailed { producer_id: String },
+    #[error("Configuration error: {message}")]
+    ConfigurationError { message: String },
     
-    #[error("Producer communication timeout: {producer_id}")]
-    ProducerTimeout { producer_id: String, timeout: Duration },
+    #[error("Communication error: {message}")]
+    CommunicationError { message: String },
     
-    #[error("WebServer process management failed: {message}")]
-    WebServerError { message: String },
+    #[error("Process management error: {message}")]
+    ProcessError { message: String },
     
-    #[error("File system operation failed: {operation} on {path}")]
-    FileSystemError { operation: String, path: String },
+    #[error("Performance tracking error: {message}")]
+    PerformanceError { message: String },
     
-    #[error("Topic folder creation failed: {topic}")]
-    TopicFolderError { topic: String },
+    #[error("Uniqueness tracking error: {message}")]
+    UniquenessError { message: String },
     
-    #[error("Statistics calculation error: {message}")]
-    StatisticsError { message: String },
+    #[error("Optimization error: {message}")]
+    OptimizationError { message: String },
     
-    #[error("Optimization cycle failed: {reason}")]
-    OptimizationError { reason: String },
+    #[error("File system error: {source}")]
+    FileSystemError {
+        #[from]
+        source: std::io::Error,
+    },
     
-    #[error("Uniqueness check failed: batch size {batch_size}")]
-    UniquenessError { batch_size: usize },
+    #[error("Serialization error: {source}")]
+    SerializationError {
+        #[from]
+        source: bincode::Error,
+    },
     
-    #[error("Configuration error: {field}")]
-    ConfigurationError { field: String },
+    #[error("JSON error: {source}")]
+    JsonError {
+        #[from]
+        source: serde_json::Error,
+    },
     
-    #[error("Shared component error")]
-    SharedError(#[from] SharedError),
+    #[error("UUID parse error: {source}")]
+    UuidError {
+        #[from]
+        source: uuid::Error,
+    },
+}
+
+impl OrchestratorError {
+    pub fn config(message: impl Into<String>) -> Self {
+        Self::ConfigurationError { message: message.into() }
+    }
     
-    #[error("I/O error: {0}")]
-    IoError(#[from] std::io::Error),
+    pub fn communication(message: impl Into<String>) -> Self {
+        Self::CommunicationError { message: message.into() }
+    }
     
-    #[error("JSON serialization error: {0}")]
-    JsonError(#[from] serde_json::Error),
+    pub fn process(message: impl Into<String>) -> Self {
+        Self::ProcessError { message: message.into() }
+    }
     
-    #[error("Binary serialization error: {message}")]
-    SerializationError { message: String },
+    pub fn performance(message: impl Into<String>) -> Self {
+        Self::PerformanceError { message: message.into() }
+    }
     
-    #[error("Network communication error: {message}")]
-    NetworkError { message: String },
+    pub fn uniqueness(message: impl Into<String>) -> Self {
+        Self::UniquenessError { message: message.into() }
+    }
+    
+    pub fn optimization(message: impl Into<String>) -> Self {
+        Self::OptimizationError { message: message.into() }
+    }
 }
 
 pub type OrchestratorResult<T> = Result<T, OrchestratorError>;

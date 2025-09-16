@@ -1,16 +1,17 @@
-//! Orchestrator library
-//!
-//! This library provides the core orchestration functionality for the LLM system.
-//! It exposes traits and implementations needed for testing and integration.
+//! Orchestrator library for coordinating distributed attribute generation
+//! 
+//! This library provides a clean, testable orchestrator implementation that
+//! coordinates multiple producer processes to generate unique attributes efficiently
+//! while managing costs and optimizing performance.
 
-pub mod traits;
 pub mod error;
-pub mod state;
+pub mod core;
+pub mod traits;
 pub mod services;
-pub mod orchestrator_impl;
+pub mod orchestrator;
 
-// Re-export main types for easy access
-pub use traits::*;
-pub use error::*;
-pub use state::*;
-pub use orchestrator_impl::Orchestrator;
+// Re-export commonly used types
+pub use error::{OrchestratorError, OrchestratorResult};
+pub use core::{OrchestratorState, UniquenessTracker, PerformanceTracker, Optimizer};
+pub use traits::{ApiKeySource, Communicator, FileSystem, ProcessManager};
+pub use orchestrator::Orchestrator;

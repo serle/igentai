@@ -1,104 +1,380 @@
-//! Producer-specific data types
+//! Producer data structures and configuration types
 
-use std::time::{Duration, Instant};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use serde::{Serialize, Deserialize};
-use shared::{ProducerId, ProviderStatus, ApiFailure};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+use shared::{ProviderId, OptimizationMode};
 
-/// Producer state management (simplified - most config moved to services)
-#[derive(Debug)]
-pub struct ProducerState {
-    // Identity and configuration
-    pub id: ProducerId,
-    pub orchestrator_addr: std::net::SocketAddr,
-    
-    // Current task context
+/// Producer configuration
+#[derive(Debug, Clone)]
+pub struct ProducerConfig {
+    pub orchestrator_addr: SocketAddr,
     pub topic: String,
-    
-    // Control flags
-    pub is_running: Arc<AtomicBool>,
-    pub should_stop: Arc<AtomicBool>,
+    pub optimization_mode: OptimizationMode,
+    pub api_keys: HashMap<ProviderId, String>,
+    pub routing_weights: HashMap<ProviderId, f64>,
+    pub max_concurrent_requests: usize,
+    pub retry_attempts: usize,
+    pub request_timeout_ms: u64,
+    pub request_size: usize,
 }
 
-/// Provider health tracking
+impl ProducerConfig {
+    pub fn new(orchestrator_addr: SocketAddr, topic: String) -> Self {
+        Self {
+            orchestrator_addr,
+            topic,
+            optimization_mode: OptimizationMode::MaximizeEfficiency,
+            api_keys: HashMap::new(),
+            routing_weights: HashMap::new(),
+            max_concurrent_requests: 10,
+            retry_attempts: 3,
+            request_timeout_ms: 30000,
+            request_size: 60, // Default value
+        }
+    }
+}
+
+/// API request to external providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderHealth {
-    pub consecutive_failures: u32,
-    pub last_success: Option<u64>, // timestamp
-    pub last_failure: Option<u64>, // timestamp
-    pub average_response_time_ms: u64,
-    pub current_status: ProviderStatus,
+pub struct ApiRequest {
+    pub provider: ProviderId,
+    pub prompt: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    pub request_id: Uuid,
+    pub timestamp: DateTime<Utc>,
 }
 
-/// Provider performance statistics
+/// API response from external providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderStats {
-    pub total_requests: u64,
-    pub successful_requests: u64,
-    pub failed_requests: u64,
-    pub total_response_time_ms: u64,
-    pub unique_contributions: u64,
-    pub last_used: Option<u64>, // timestamp
-}
-
-/// A single provider request record
-#[derive(Debug, Clone)]
-pub struct ProviderRequest {
-    pub timestamp: Instant,
-    pub provider_used: String,
-    pub model_used: String,
-    pub prompt_sent: String,
-    pub response_time: Duration,
-    pub success: bool,
-    pub failure_reason: Option<ApiFailure>,
-}
-
-/// Provider response data
-#[derive(Debug, Clone)]
-pub struct ProviderResponse {
+pub struct ApiResponse {
+    pub provider: ProviderId,
+    pub request_id: Uuid,
     pub content: String,
     pub tokens_used: u32,
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub model_used: String,
-    pub response_time: Duration,
+    pub response_time_ms: u64,
+    pub timestamp: DateTime<Utc>,
+    pub success: bool,
+    pub error_message: Option<String>,
+}
+
+/// Processed attributes extracted from responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessedAttribute {
+    pub value: String,
+    pub source_provider: ProviderId,
+    pub extraction_pattern: String,
+    pub confidence_score: f64,
+    pub timestamp: DateTime<Utc>,
+    pub is_unique: bool,
+}
+
+/// Producer performance metrics
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProducerMetrics {
+    pub requests_sent: u64,
+    pub responses_received: u64,
+    pub attributes_extracted: u64,
+    pub unique_attributes: u64,
+    pub total_tokens_used: u64,
+    pub total_cost: f64,
+    pub avg_response_time_ms: f64,
+    pub success_rate: f64,
+    pub uptime_seconds: u64,
+    pub last_updated: DateTime<Utc>,
+}
+
+impl ProducerMetrics {
+    pub fn new() -> Self {
+        Self {
+            last_updated: Utc::now(),
+            ..Default::default()
+        }
+    }
+
+    /// Calculate attributes per minute
+    pub fn attributes_per_minute(&self) -> f64 {
+        if self.uptime_seconds == 0 {
+            return 0.0;
+        }
+        self.attributes_extracted as f64 / (self.uptime_seconds as f64 / 60.0)
+    }
+
+    /// Calculate cost efficiency (attributes per dollar)
+    pub fn cost_efficiency(&self) -> f64 {
+        if self.total_cost == 0.0 {
+            return 0.0;
+        }
+        self.unique_attributes as f64 / self.total_cost
+    }
+
+    /// Calculate token efficiency (attributes per 1k tokens)
+    pub fn token_efficiency(&self) -> f64 {
+        if self.total_tokens_used == 0 {
+            return 0.0;
+        }
+        (self.unique_attributes as f64 * 1000.0) / self.total_tokens_used as f64
+    }
+}
+
+/// Producer internal state
+#[derive(Debug)]
+pub struct ProducerState {
+    pub config: ProducerConfig,
+    pub is_running: bool,
+    pub should_stop: bool,
+    pub start_time: Option<DateTime<Utc>>,
+    pub current_prompt: Option<String>,
+    pub routing_strategy: Option<shared::types::RoutingStrategy>,
+    pub generation_config: Option<shared::types::GenerationConfig>,
+    pub metrics: ProducerMetrics,
+    /// Seen values from orchestrator for bloom filter synchronization
+    pub seen_values_from_orchestrator: Option<Vec<String>>,
+    pub last_sync_version: Option<u64>,
 }
 
 impl ProducerState {
-    /// Create new producer state
-    pub fn new(id: ProducerId, orchestrator_addr: std::net::SocketAddr) -> Self {
+    pub fn new(config: ProducerConfig) -> Self {
         Self {
-            id,
-            orchestrator_addr,
-            topic: String::new(),
-            is_running: Arc::new(AtomicBool::new(false)),
-            should_stop: Arc::new(AtomicBool::new(false)),
+            config,
+            is_running: false,
+            should_stop: false,
+            start_time: None,
+            current_prompt: None,
+            routing_strategy: None,
+            generation_config: None,
+            metrics: ProducerMetrics::new(),
+            seen_values_from_orchestrator: None,
+            last_sync_version: None,
+        }
+    }
+
+    /// Mark producer as started
+    pub fn start(&mut self) {
+        self.is_running = true;
+        self.should_stop = false;
+        self.start_time = Some(Utc::now());
+    }
+
+    /// Mark producer as stopped
+    pub fn stop(&mut self) {
+        self.is_running = false;
+        self.should_stop = true;
+    }
+
+    /// Get current uptime in seconds
+    pub fn uptime_seconds(&self) -> u64 {
+        if let Some(start_time) = self.start_time {
+            (Utc::now() - start_time).num_seconds() as u64
+        } else {
+            0
         }
     }
 }
 
-impl Default for ProviderHealth {
-    fn default() -> Self {
-        Self {
-            consecutive_failures: 0,
-            last_success: None,
-            last_failure: None,
-            average_response_time_ms: 0,
-            current_status: ProviderStatus::Unknown,
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_producer_config_creation() {
+        let addr: SocketAddr = "127.0.0.1:6001".parse().unwrap();
+        let config = ProducerConfig::new(addr, "test topic".to_string());
+        
+        assert_eq!(config.orchestrator_addr, addr);
+        assert_eq!(config.topic, "test topic");
+        assert_eq!(config.max_concurrent_requests, 10);
+        assert!(config.api_keys.is_empty());
+    }
+
+    #[test]
+    fn test_producer_metrics_calculations() {
+        let mut metrics = ProducerMetrics::new();
+        metrics.attributes_extracted = 120;
+        metrics.unique_attributes = 100;
+        metrics.total_tokens_used = 5000;
+        metrics.total_cost = 2.5;
+        metrics.uptime_seconds = 60; // 1 minute
+
+        assert_eq!(metrics.attributes_per_minute(), 120.0);
+        assert_eq!(metrics.cost_efficiency(), 40.0); // 100 attributes / $2.5
+        assert_eq!(metrics.token_efficiency(), 20.0); // (100 * 1000) / 5000
+    }
+
+    #[test]
+    fn test_producer_state_lifecycle() {
+        let config = ProducerConfig::new("127.0.0.1:6001".parse().unwrap(), "test".to_string());
+        let mut state = ProducerState::new(config);
+        
+        assert!(!state.is_running);
+        assert!(!state.should_stop);
+        
+        state.start();
+        assert!(state.is_running);
+        assert!(!state.should_stop);
+        assert!(state.start_time.is_some());
+        
+        state.stop();
+        assert!(!state.is_running);
+        assert!(state.should_stop);
     }
 }
 
-impl Default for ProviderStats {
-    fn default() -> Self {
-        Self {
-            total_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0,
-            total_response_time_ms: 0,
-            unique_contributions: 0,
-            last_used: None,
+// ============================================================================
+// Producer Execution Types
+// ============================================================================
+
+use std::time::Duration;
+use tokio::sync::mpsc;
+use shared::ProducerCommand;
+use crate::core::generator::CommandGenerator;
+
+/// Unified configuration that handles both test and production modes
+#[derive(Debug, Clone)]
+pub struct ExecutionConfig {
+    pub mode: ExecutionMode,
+    pub producer_config: ProducerConfig,
+    pub request_interval: Duration,
+    pub max_retries: u32,
+    pub status_report_interval: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub enum ExecutionMode {
+    Standalone { 
+        max_iterations: Option<u32>,
+    },
+    Production {
+        orchestrator_endpoint: String,
+    },
+}
+
+/// Unified command source that abstracts test vs production command flows
+#[derive(Debug)]
+pub enum CommandSource {
+    /// Commands from orchestrator (production mode)
+    Orchestrator(mpsc::Receiver<ProducerCommand>),
+    /// Simulated commands for test mode
+    Simulator(CommandGenerator),
+}
+
+use crate::error::{ProducerResult, ProducerError};
+
+impl ExecutionConfig {
+    /// Parse command line arguments and environment to create unified config
+    pub fn from_args_and_env(
+        orchestrator_endpoint: Option<String>, 
+        topic: String,
+        request_interval_secs: Option<u64>,
+        max_requests: Option<u32>,
+    ) -> ProducerResult<Self> {
+        let orchestrator_addr = orchestrator_endpoint.as_ref()
+            .map(|ep| ep.parse().map_err(|_| ProducerError::config("Invalid endpoint")))
+            .transpose()?
+            .unwrap_or_else(|| "127.0.0.1:6001".parse().unwrap());
+
+        let producer_config = ProducerConfig::new(orchestrator_addr, topic);
+
+        let mode = match orchestrator_endpoint {
+            Some(endpoint) => ExecutionMode::Production { orchestrator_endpoint: endpoint },
+            None => {
+                ExecutionMode::Standalone { max_iterations: max_requests }
+            }
+        };
+
+        Ok(ExecutionConfig {
+            mode,
+            producer_config,
+            request_interval: Duration::from_secs(request_interval_secs.unwrap_or(2)),
+            max_retries: 3,
+            status_report_interval: Duration::from_secs(2),
+        })
+    }
+
+    /// Detect all available providers based on API keys
+    pub fn detect_available_providers(config: &ProducerConfig) -> Vec<ProviderId> {
+        let mut providers: Vec<ProviderId> = config.api_keys.keys().copied().collect();
+        
+        // Always include Random provider as fallback if not already present
+        if !providers.contains(&ProviderId::Random) {
+            providers.push(ProviderId::Random);
         }
+        
+        // Prefer Random provider for testing by putting it first
+        providers.sort_by(|a, b| {
+            match (a, b) {
+                (ProviderId::Random, _) => std::cmp::Ordering::Less,
+                (_, ProviderId::Random) => std::cmp::Ordering::Greater,
+                _ => a.to_string().cmp(&b.to_string()),
+            }
+        });
+        
+        providers
+    }
+}
+
+#[cfg(test)]
+mod execution_config_tests {
+    use super::*;
+
+    #[test]
+    fn test_execution_config_creation() {
+        // Test production mode
+        let config = ExecutionConfig::from_args_and_env(
+            Some("127.0.0.1:6001".to_string()),
+            "test topic".to_string(),
+            Some(5),
+            None,
+        ).unwrap();
+
+        match config.mode {
+            ExecutionMode::Production { .. } => {},
+            _ => panic!("Expected production mode"),
+        }
+
+        // Test test mode
+        let config = ExecutionConfig::from_args_and_env(
+            None,
+            "test topic".to_string(),
+            Some(2),
+            Some(100),
+        ).unwrap();
+
+        match config.mode {
+            ExecutionMode::Test { max_iterations: Some(100) } => {},
+            _ => panic!("Expected test mode with max_iterations"),
+        }
+    }
+
+    #[test]
+    fn test_detect_available_providers() {
+        let mut api_keys = HashMap::new();
+        api_keys.insert(ProviderId::OpenAI, "test_key".to_string());
+        api_keys.insert(ProviderId::Anthropic, "test_key".to_string());
+        
+        let config = ProducerConfig {
+            orchestrator_addr: "127.0.0.1:6001".parse().unwrap(),
+            topic: "test".to_string(),
+            optimization_mode: OptimizationMode::MaximizeEfficiency,
+            api_keys,
+            routing_weights: HashMap::new(),
+            max_concurrent_requests: 10,
+            retry_attempts: 3,
+            request_timeout_ms: 30000,
+            request_size: 10,
+        };
+
+        let providers = ExecutionConfig::detect_available_providers(&config);
+        
+        // Should include Random first (preferred for testing)
+        assert_eq!(providers[0], ProviderId::Random);
+        // Should include the configured providers
+        assert!(providers.contains(&ProviderId::OpenAI));
+        assert!(providers.contains(&ProviderId::Anthropic));
+        // Should have at least 3 providers
+        assert!(providers.len() >= 3);
     }
 }

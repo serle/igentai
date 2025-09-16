@@ -3,7 +3,8 @@ members = [
     "orchestrator",
     "producer", 
     "webserver",
-    "shared"
+    "shared",
+    "tester"
 ]
 resolver = "2"
 
@@ -32,6 +33,7 @@ tokio-tungstenite = "0.21"
 
 # HTTP server
 axum = "0.7"
+hyper = "1.0"
 tower = "0.4" 
 tower-http = { version = "0.5", features = ["fs", "cors"] }
 

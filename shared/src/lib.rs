@@ -1,33 +1,22 @@
-//! Shared types for LLM orchestration system
+//! Shared types and messages for the orchestrator system
 //!
-//! Contains only truly shared types for inter-process communication.
-//! Component-internal types (like Browser ↔ WebServer messages) are kept
-//! in their respective components.
+//! This crate provides the core types and message definitions used for
+//! communication between the orchestrator, producers, and webserver.
 
-pub mod types;
-pub mod errors;
 pub mod messages;
-
-pub use types::*;
+pub mod types;
+pub mod logging;
 
 // Re-export commonly used types
-pub use types::{KeyValuePair, ApiFailure, ProviderId, RoutingStrategy};
-pub use errors::*;
+pub use types::{
+    ProviderId, ProcessId, ProviderMetadata, TokenUsage, SystemMetrics, ProcessStatus,
+    OptimizationMode, GenerationConstraints, RoutingStrategy, GenerationConfig,
+    ProducerMetrics, ProviderMetrics, ProviderStatus, RequestConfig, ApiFailure,
+    ProviderRequestMetadata, SharedError,
+};
 
-// Re-export only inter-process communication messages
+// Re-export message types
 pub use messages::{
-    // Producer ↔ Orchestrator communication
-    ProducerCommand, ProducerUpdate, ProducerMessage, ProviderRequestMetadata,
-    
-    // WebServer ↔ Orchestrator communication  
-    TaskRequest, TaskUpdate,
-    
-    // Shared data structures
-    SystemMetrics, LLMPerformance, AttributeUpdate, SystemHealth,
-    
-    // Process coordination types
-    ProcessHandle, ProcessType, ProcessStatus, ProcessHealth, ChannelHealth,
-    
-    // Configuration types
-    ProducerConfig, WebServerConfig, SessionState, SessionStatus,
+    webserver::{WebServerRequest, OrchestratorUpdate, TaskRequest, TaskUpdate},
+    producer::{OrchestratorCommand, ProducerUpdate, ProducerCommand, ProducerResponse},
 };

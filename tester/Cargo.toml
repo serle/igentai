@@ -1,0 +1,40 @@
+[package]
+name = "tester"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "tester"
+path = "src/main.rs"
+
+[dependencies]
+# Internal dependencies
+shared = { path = "../shared" }
+orchestrator = { path = "../orchestrator" }
+producer = { path = "../producer" }
+webserver = { path = "../webserver" }
+
+# External dependencies
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+axum = { workspace = true }
+hyper = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+clap = { workspace = true }
+uuid = { workspace = true }
+
+# Test framework
+assert_matches = "1.5"
+tempfile = "3.8"
+
+# Fault injection dependencies
+sysinfo = "0.30"
+
+# Unix-specific dependencies
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+nix = { version = "0.28", features = ["process", "signal"] }

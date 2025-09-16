@@ -37,7 +37,7 @@ Thumbs.db
 *.dSYM/
 
 # Output files from the application
-output.txt
+/output/
 
 # Logs
 *.log

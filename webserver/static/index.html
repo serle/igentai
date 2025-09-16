@@ -3,145 +3,1111 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LLM Orchestration Dashboard</title>
-    <link rel="stylesheet" href="/static/app.css">
+    <title>Orchestrator Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'SF Pro Display', sans-serif; 
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 24px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 { 
+            margin: 0;
+            font-size: 2.2em;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            letter-spacing: -0.5px;
+        }
+        .status-bar {
+            display: flex;
+            gap: 24px;
+            margin-top: 20px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.06) 100%);
+            padding: 18px 24px;
+            border-radius: 12px;
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ff4444;
+            box-shadow: 0 0 6px rgba(255, 68, 68, 0.6);
+            animation: pulse-red 2s infinite;
+        }
+        .status-indicator.connected {
+            background: #00ff88;
+            box-shadow: 0 0 8px rgba(0, 255, 136, 0.6);
+            animation: pulse-green 2s infinite;
+        }
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        @keyframes pulse-green {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+        .section {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%);
+            padding: 24px;
+            margin: 24px 0;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+        }
+        .section h2 {
+            margin: 0 0 20px 0;
+            font-size: 1.4em;
+            font-weight: 600;
+            color: #ffffff;
+            letter-spacing: 0.5px;
+        }
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin: 24px 0;
+            align-items: center;
+            padding: 20px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .topic-input {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 14px 16px;
+            border-radius: 8px;
+            font-size: 16px;
+            flex: 1;
+            min-width: 200px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            height: 48px;
+            box-sizing: border-box;
+        }
+        .topic-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        .producer-input {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 14px 8px;
+            border-radius: 8px;
+            font-size: 16px;
+            width: 85px;
+            text-align: center;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            height: 48px;
+            box-sizing: border-box;
+        }
+        .producer-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            height: 48px;
+            box-sizing: border-box;
+        }
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        button:active:not(:disabled) {
+            transform: translateY(-1px);
+        }
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+            transform: none;
+            opacity: 0.5;
+            box-shadow: none;
+        }
+        .producer-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+        .producer-label {
+            font-size: 9px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.7);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 0;
+            padding: 0;
+            line-height: 1;
+            position: absolute;
+            top: -14px;
+            left: 0;
+            white-space: nowrap;
+        }
+        input[type="text"] {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 16px;
+            flex: 1;
+        }
+        input[type="text"]::placeholder, input[type="number"]::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+        .topic-input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        .log {
+            background: linear-gradient(135deg, #0d0d1f 0%, #1a1a2e 100%);
+            padding: 16px;
+            border-radius: 12px;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            font-size: 13px;
+            max-height: 350px;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        .log::-webkit-scrollbar {
+            width: 8px;
+        }
+        .log::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+        }
+        .log::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 4px;
+        }
+        .log-entry {
+            margin: 6px 0;
+            padding: 8px 12px;
+            border-left: 3px solid #667eea;
+            border-radius: 0 4px 4px 0;
+            background: rgba(102, 126, 234, 0.05);
+            transition: all 0.2s ease;
+            font-weight: 400;
+            line-height: 1.4;
+        }
+        .log-entry:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+        .log-entry.error {
+            border-color: #ff4444;
+            background: rgba(255, 68, 68, 0.08);
+            color: #ff8888;
+        }
+        .log-entry.error:hover {
+            background: rgba(255, 68, 68, 0.12);
+        }
+        .log-entry.success {
+            border-color: #00ff88;
+            background: rgba(0, 255, 136, 0.08);
+            color: #88ffaa;
+        }
+        .log-entry.success:hover {
+            background: rgba(0, 255, 136, 0.12);
+        }
+        .attributes-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+            height: 200px;
+            max-height: 200px;
+            overflow-y: auto;
+            padding: 2px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.01) 100%);
+        }
+        .attributes-list::-webkit-scrollbar {
+            width: 8px;
+        }
+        .attributes-list::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+        }
+        .attributes-list::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 4px;
+        }
+        .attributes-list::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(135deg, #764ba2, #667eea);
+        }
+        .attribute-item {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.25) 0%, rgba(118, 75, 162, 0.15) 100%);
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid rgba(102, 126, 234, 0.3);
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 2px 4px rgba(102, 126, 234, 0.1);
+            animation: fadeInScale 0.3s ease-out;
+            word-break: break-word;
+            line-height: 1.3;
+        }
+        .attribute-item:hover {
+            transform: translateY(-2px);
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.35) 0%, rgba(118, 75, 162, 0.25) 100%);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.2);
+        }
+        @keyframes fadeInScale {
+            0% {
+                opacity: 0;
+                transform: scale(0.9);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 20px;
+        }
+        .metric-card {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%);
+            padding: 20px 16px;
+            border-radius: 12px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        .metric-card:hover {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.06) 100%);
+            transform: translateY(-2px);
+        }
+        .metric-value {
+            font-size: 2.2em;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.1;
+        }
+        .metric-label {
+            font-size: 0.85em;
+            opacity: 0.8;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .container {
+                padding: 16px;
+            }
+            .header {
+                padding: 20px 16px;
+            }
+            .controls {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .topic-input {
+                min-width: 150px;
+                order: 1;
+                flex: 1 1 100%;
+            }
+            .producer-group {
+                order: 2;
+            }
+            button {
+                order: 3;
+                flex: 1;
+            }
+            .status-bar {
+                flex-wrap: wrap;
+                gap: 16px;
+            }
+            .metrics {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        
+        /* Loading animation */
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+        
+        .loading button {
+            position: relative;
+            color: transparent;
+        }
+        
+        .loading button::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 16px;
+            height: 16px;
+            border: 2px solid transparent;
+            border-top: 2px solid #ffffff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+    </style>
 </head>
 <body>
-    <div id="app">
-        <header class="header">
-            <h1>LLM Orchestration System</h1>
-            <div class="connection-status" id="connection-status">
-                <span class="status-dot" id="status-dot"></span>
-                <span id="status-text">Connecting...</span>
+    <div class="header">
+        <div class="container">
+            <h1>🎯 Orchestrator Dashboard</h1>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="status-indicator" id="wsStatus"></div>
+                <span>WebSocket: <span id="wsState">Disconnected</span></span>
             </div>
-        </header>
+            <div class="status-item">
+                <div class="status-indicator" id="orchStatus"></div>
+                <span>Orchestrator: <span id="orchState">Unknown</span></span>
+            </div>
+            <div class="status-item">
+                <span>Active Producers: <span id="activeProducers">0</span></span>
+            </div>
+        </div>
 
-        <main class="main">
-            <!-- Control Panel -->
-            <section class="card control-panel">
-                <h2>Control Panel</h2>
-                <form id="topic-form" class="topic-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="topic-input">Topic</label>
-                            <input 
-                                type="text" 
-                                id="topic-input" 
-                                placeholder="Enter topic (e.g., 'Paris attractions', 'programming languages')" 
-                                required
-                                autocomplete="off"
-                            >
-                        </div>
-                        <div class="form-group">
-                            <label for="producer-count">Producers</label>
-                            <input 
-                                type="number" 
-                                id="producer-count" 
-                                value="5" 
-                                min="1" 
-                                max="10"
-                                title="Number of concurrent LLM producers (1-10)"
-                            >
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="custom-prompt">Custom Prompt (Optional)</label>
-                            <textarea 
-                                id="custom-prompt" 
-                                rows="3"
-                                placeholder="Leave empty for default prompt, or customize for better results..."
-                            ></textarea>
-                        </div>
-                    </div>
-                    <div class="button-group">
-                        <button type="submit" id="start-btn" class="btn btn-primary">Start Generation</button>
-                        <button type="button" id="stop-btn" class="btn btn-secondary" disabled>Stop Generation</button>
-                    </div>
-                </form>
-            </section>
+        <div class="section">
+            <h2>🎬 Generation Control</h2>
+            <div class="controls">
+                <input type="text" id="topicInput" class="topic-input" placeholder="Enter topic (e.g., 'Sustainable Energy')">
+                <div class="producer-group">
+                    <label for="producerInput" class="producer-label">Producers</label>
+                    <input type="number" id="producerInput" class="producer-input" min="1" max="99" value="3" placeholder="3">
+                </div>
+                <div class="producer-group">
+                    <label for="iterationsInput" class="producer-label">Iterations</label>
+                    <input type="number" id="iterationsInput" class="producer-input" min="1" max="999" placeholder="∞">
+                </div>
+                <button id="startBtn">Start</button>
+                <button id="stopBtn" disabled>Stop</button>
+            </div>
+            <div class="metrics">
+                <div class="metric-card">
+                    <div class="metric-value" id="uamValue">0.0</div>
+                    <div class="metric-label">UAM (Unique/Min)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="costValue">$0.00</div>
+                    <div class="metric-label">Cost/Minute</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="totalAttributes">0</div>
+                    <div class="metric-label">Total Attributes</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="uniqueAttributes">0</div>
+                    <div class="metric-label">Unique Attributes</div>
+                </div>
+            </div>
+        </div>
 
-            <!-- System Metrics -->
-            <section class="card metrics-section">
-                <h2>System Metrics</h2>
-                <div class="metrics-grid">
-                    <div class="metric-card">
-                        <div class="metric-label">Total Unique Entries</div>
-                        <div class="metric-value" id="total-unique">0</div>
-                        <div class="metric-trend" id="total-trend"></div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-label">Entries per Minute</div>
-                        <div class="metric-value" id="entries-per-minute">0.0</div>
-                        <div class="metric-trend" id="rate-trend"></div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-label">Active Producers</div>
-                        <div class="metric-value" id="active-producers">0</div>
-                        <div class="metric-trend" id="producers-trend"></div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-label">System Uptime</div>
-                        <div class="metric-value" id="system-uptime">0s</div>
-                        <div class="metric-trend" id="uptime-trend"></div>
-                    </div>
+        <div class="section">
+            <h2>📊 Unique Attributes <span id="uniqueCountDisplay">(0)</span></h2>
+            <div class="attributes-list" id="attributesList">
+                <div style="opacity: 0.5; grid-column: 1/-1; text-align: center;">
+                    No attributes yet. Start generation to see results.
                 </div>
-            </section>
+            </div>
+        </div>
 
-            <!-- Performance Chart -->
-            <section class="card chart-section">
-                <h2>Performance Trends</h2>
-                <div class="chart-container">
-                    <canvas id="performance-chart" width="800" height="300"></canvas>
-                </div>
-                <div class="chart-controls">
-                    <button class="btn btn-small" onclick="window.dashboard.toggleChartData('rate')">Toggle Rate</button>
-                    <button class="btn btn-small" onclick="window.dashboard.toggleChartData('unique')">Toggle Unique Count</button>
-                    <button class="btn btn-small" onclick="window.dashboard.clearChart()">Clear Chart</button>
-                </div>
-            </section>
-
-            <!-- LLM Provider Performance -->
-            <section class="card providers-section">
-                <h2>LLM Provider Performance</h2>
-                <div id="provider-performance" class="provider-grid">
-                    <!-- Provider metrics will be populated here -->
-                </div>
-            </section>
-
-            <!-- Recent Attributes -->
-            <section class="card attributes-section">
-                <h2>Recent Unique Attributes</h2>
-                <div class="attributes-header">
-                    <div class="current-topic">
-                        Topic: <span id="current-topic">None</span>
-                    </div>
-                    <div class="attributes-count">
-                        Showing latest <span id="recent-count">0</span> attributes
-                    </div>
-                </div>
-                <div class="attributes-container" id="attributes-container">
-                    <div class="no-attributes">No attributes generated yet. Start a topic to begin.</div>
-                </div>
-            </section>
-
-            <!-- System Logs -->
-            <section class="card logs-section">
-                <h2>System Alerts</h2>
-                <div class="logs-header">
-                    <button class="btn btn-small" onclick="window.dashboard.clearLogs()">Clear Logs</button>
-                </div>
-                <div class="log-container" id="log-container">
-                    <div class="log-entry log-info">
-                        <span class="log-time">--:--:--</span>
-                        <span class="log-message">System ready. Connect to start generation.</span>
-                    </div>
-                </div>
-            </section>
-        </main>
+        <div class="section">
+            <h2>📊 Attribute Batch Sizes</h2>
+            <div style="height: 300px; overflow-x: auto; overflow-y: hidden; background: rgba(255, 255, 255, 0.02); border-radius: 8px; padding: 10px; border: 1px solid rgba(255, 255, 255, 0.1);">
+                <canvas id="batchChart" style="height: 280px;"></canvas>
+            </div>
+        </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script>
+        // WebSocket connection management
+        let ws = null;
+        let reconnectInterval = null;
+        let pingInterval = null;
+        
+        // UI elements
+        const wsStatus = document.getElementById('wsStatus');
+        const wsState = document.getElementById('wsState');
+        const orchStatus = document.getElementById('orchStatus');
+        const orchState = document.getElementById('orchState');
+        // wsLog element was removed - using console logging instead
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const topicInput = document.getElementById('topicInput');
+        const producerInput = document.getElementById('producerInput');
+        const attributesList = document.getElementById('attributesList');
+        const activeProducers = document.getElementById('activeProducers');
+        const uamValue = document.getElementById('uamValue');
+        const costValue = document.getElementById('costValue');
+        const totalAttributes = document.getElementById('totalAttributes');
+        const uniqueAttributes = document.getElementById('uniqueAttributes');
+        const uniqueCountDisplay = document.getElementById('uniqueCountDisplay');
+        
+        // State
+        let isGenerating = false;
+        let attributes = new Set();
+        let totalCount = 0;
+        let batchChart = null;
+        let batchData = [];
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logMessage = '[' + timestamp + '] ' + message;
+            
+            // Log to console with appropriate level
+            if (type === 'error') {
+                console.error('🚨', logMessage);
+            } else if (type === 'success') {
+                console.log('✅', logMessage);
+            } else {
+                console.log('ℹ️', logMessage);
+            }
+        }
+        
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = protocol + '//' + window.location.host + '/ws';
+            
+            log('Connecting to WebSocket at ' + wsUrl + '...');
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('🔗 WebSocket connection opened');
+                log('WebSocket connected successfully!', 'success');
+                wsStatus.classList.add('connected');
+                wsState.textContent = 'Connected';
+                
+                // Start ping interval
+                pingInterval = setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        console.log('🏓 Sending ping to server');
+                        ws.send(JSON.stringify({ type: 'ping' }));
+                        // log('Sent ping to server'); // Comment out to reduce log noise
+                    }
+                }, 30000); // Every 30 seconds
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    console.log('🔄 WebSocket message received:', message);
+                    log('Received: ' + message.type);
+                    handleMessage(message);
+                } catch (e) {
+                    console.error('❌ Failed to parse WebSocket message:', e, 'Raw data:', event.data);
+                    log('Failed to parse message: ' + e.message, 'error');
+                }
+            };
+            
+            ws.onerror = (error) => {
+                // Only log to console, don't duplicate the UI log since onclose will handle it
+                console.error('WebSocket error:', error);
+            };
+            
+            ws.onclose = (event) => {
+                // Only log disconnect message once here
+                log('WebSocket disconnected (code: ' + event.code + ', reason: ' + (event.reason || 'unknown') + ')', 'error');
+                wsStatus.classList.remove('connected');
+                wsState.textContent = 'Disconnected';
+                orchStatus.classList.remove('connected');
+                orchState.textContent = 'Unknown';
+                
+                // Clear ping interval
+                if (pingInterval) {
+                    clearInterval(pingInterval);
+                    pingInterval = null;
+                }
+                
+                // Attempt to reconnect
+                if (!reconnectInterval) {
+                    reconnectInterval = setTimeout(() => {
+                        reconnectInterval = null;
+                        connectWebSocket();
+                    }, 3000);
+                }
+            };
+        }
+        
+        function handleMessage(message) {
+            console.log('📥 Processing message type:', message.type, 'with data:', message.data);
+            
+            switch (message.type) {
+                case 'connection_ack':
+                    console.log('✅ Connection acknowledged');
+                    log('Session established: ' + message.data.session_id, 'success');
+                    break;
+                    
+                case 'status_update':
+                    console.log('📊 Status update received');
+                    const data = message.data;
+                    orchStatus.classList.toggle('connected', data.orchestrator_connected);
+                    orchState.textContent = data.orchestrator_connected ? 'Connected' : 'Offline';
+                    activeProducers.textContent = data.active_producers || 0;
+                    if (data.current_topic) {
+                        topicInput.value = data.current_topic;
+                        isGenerating = true;
+                        updateButtons();
+                    }
+                    break;
+                    
+                case 'attribute_update':
+                    console.log('🏷️ Attribute update received with', message.data.attributes.length, 'attributes');
+                    handleAttributeUpdate(message.data);
+                    break;
+                    
+                case 'dashboard_update':
+                    console.log('📈 Dashboard update received');
+                    updateMetrics(message.data.metrics);
+                    break;
+                    
+                case 'alert':
+                    console.log('⚠️ Alert received:', message.data.title);
+                    log('Alert: ' + message.data.title + ' - ' + message.data.message, 
+                        message.data.level === 'error' ? 'error' : 'info');
+                    break;
+                    
+                case 'statistics_update':
+                    console.log('📊 Statistics update received');
+                    updateStatistics(message.data);
+                    break;
+                    
+                case 'generation_complete':
+                    console.log('🏁 Generation complete received');
+                    handleGenerationComplete(message.data);
+                    break;
+                    
+                default:
+                    console.warn('❓ Unknown message type:', message.type);
+                    break;
+            }
+        }
+        
+        function handleAttributeUpdate(data) {
+            console.log('🏷️ handleAttributeUpdate called with:', data);
+            console.log('📊 Current state: totalCount =', totalCount, ', unique size =', attributes.size);
+            
+            totalCount += data.attributes.length;
+            
+            // Add new unique attributes
+            const newAttributes = [];
+            data.attributes.forEach(attr => {
+                if (!attributes.has(attr)) {
+                    attributes.add(attr);
+                    newAttributes.push(attr);
+                }
+            });
+            
+            console.log('✨ New attributes:', newAttributes.length, 'out of', data.attributes.length, 'total');
+            
+            // Update UI
+            totalAttributes.textContent = totalCount;
+            uniqueAttributes.textContent = attributes.size;
+            uniqueCountDisplay.textContent = '(' + attributes.size + ')';
+            
+            
+            console.log('📈 Updated UI counters: total =', totalCount, ', unique =', attributes.size);
+            
+            // Add to display
+            if (newAttributes.length > 0) {
+                if (attributesList.querySelector('div[style]')) {
+                    console.log('🗑️ Clearing placeholder message');
+                    attributesList.innerHTML = '';
+                }
+                
+                console.log('➕ Adding', newAttributes.length, 'new attributes to display');
+                newAttributes.forEach(attr => {
+                    const item = document.createElement('div');
+                    item.className = 'attribute-item';
+                    item.textContent = attr;
+                    attributesList.insertBefore(item, attributesList.firstChild);
+                });
+                
+                // Keep only last 100 displayed
+                while (attributesList.children.length > 100) {
+                    attributesList.removeChild(attributesList.lastChild);
+                }
+            }
+            
+            // Update batch chart with NEW unique attributes count (this shows diminishing returns)
+            console.log('📊 Updating chart with new unique count:', newAttributes.length, '(out of', data.attributes.length, 'total in batch)');
+            updateBatchChart(newAttributes.length);
+        }
+        
+        function updateMetrics(metrics) {
+            console.log('📊 updateMetrics called with:', metrics);
+            
+            if (metrics.uam !== undefined) {
+                uamValue.textContent = metrics.uam.toFixed(2);
+                console.log('📈 Updated UAM:', metrics.uam.toFixed(2));
+            } else {
+                console.log('⚠️ UAM field not found in metrics');
+            }
+            
+            if (metrics.cost_per_minute !== undefined) {
+                costValue.textContent = '$' + metrics.cost_per_minute.toFixed(2);
+                console.log('💰 Updated Cost/Min:', '$' + metrics.cost_per_minute.toFixed(2));
+            } else {
+                console.log('⚠️ cost_per_minute field not found in metrics');
+            }
+            
+            if (metrics.total_attributes !== undefined) {
+                totalAttributes.textContent = metrics.total_attributes;
+                console.log('📋 Updated total attributes:', metrics.total_attributes);
+            }
+            
+            if (metrics.active_producers !== undefined) {
+                activeProducers.textContent = metrics.active_producers;
+                console.log('👥 Updated active producers:', metrics.active_producers);
+            }
+            
+            if (metrics.current_topic !== undefined && metrics.current_topic !== null) {
+                topicInput.value = metrics.current_topic;
+                isGenerating = true;
+                updateButtons();
+                console.log('📝 Updated current topic:', metrics.current_topic);
+            }
+        }
+        
+        
+        function updateButtons() {
+            startBtn.disabled = isGenerating || !topicInput.value.trim();
+            stopBtn.disabled = !isGenerating;
+        }
+        
+        // Track previous unique count for chart updates
+        let previousUniqueCount = 0;
+
+        function updateStatistics(data) {
+            console.log('📊 updateStatistics called with:', data);
+            
+            // Update metrics display
+            if (data.metrics) {
+                console.log('📈 Updating metrics:', data.metrics);
+                updateMetrics(data.metrics);
+            }
+            
+            // Update active producers count
+            if (data.active_producers !== undefined) {
+                activeProducers.textContent = data.active_producers;
+                console.log('👥 Updated active producers:', data.active_producers);
+            }
+            
+            // Update unique attributes count and chart
+            if (data.total_unique_attributes !== undefined) {
+                const currentCount = data.total_unique_attributes;
+                const newInThisBatch = currentCount - previousUniqueCount;
+                
+                uniqueAttributes.textContent = currentCount;
+                uniqueCountDisplay.textContent = '(' + currentCount + ')';
+                console.log('🎯 Updated unique attributes count:', currentCount);
+                
+                // Update chart with new unique attributes from this update
+                if (newInThisBatch > 0) {
+                    console.log('📊 Updating chart with new unique count from statistics:', newInThisBatch);
+                    updateBatchChart(newInThisBatch);
+                }
+                
+                previousUniqueCount = currentCount;
+            }
+            
+            // Update topic if changed
+            if (data.current_topic && data.current_topic !== topicInput.value) {
+                topicInput.value = data.current_topic;
+                isGenerating = true;
+                updateButtons();
+                console.log('📝 Updated topic:', data.current_topic);
+            }
+        }
+        
+        function handleGenerationComplete(data) {
+            log('Generation Complete: ' + data.topic + ' - ' + data.total_iterations + ' iterations, ' + 
+                data.final_unique_count + ' unique attributes. Reason: ' + data.completion_reason, 'success');
+            
+            // Reset generation state
+            isGenerating = false;
+            updateButtons();
+            
+            // Show completion message in attributes list
+            const completionMessage = document.createElement('div');
+            completionMessage.style.cssText = 'opacity: 0.7; grid-column: 1/-1; text-align: center; margin-top: 20px; font-style: italic;';
+            completionMessage.textContent = 'Generation complete. ' + data.final_unique_count + ' unique attributes found.';
+            attributesList.appendChild(completionMessage);
+        }
+        
+        // REST API helper function
+        async function callAPI(endpoint, method = 'GET', data = null) {
+            try {
+                const options = {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                };
+                
+                if (data) {
+                    options.body = JSON.stringify(data);
+                }
+                
+                const response = await fetch(endpoint, options);
+                const result = await response.json();
+                
+                if (response.ok) {
+                    return result;
+                } else {
+                    throw new Error(result.message || 'API request failed');
+                }
+            } catch (error) {
+                log('API Error: ' + error.message, 'error');
+                throw error;
+            }
+        }
+        
+        // Event handlers using REST API
+        startBtn.onclick = async () => {
+            const topic = topicInput.value.trim();
+            const producerCount = parseInt(producerInput.value) || 3;
+            const iterations = parseInt(document.getElementById('iterationsInput').value) || null;
+            
+            if (!topic) {
+                log('Please enter a topic', 'error');
+                return;
+            }
+            
+            // Clear previous generation data
+            attributes.clear();
+            totalCount = 0;
+            totalAttributes.textContent = '0';
+            uniqueAttributes.textContent = '0';
+            uniqueCountDisplay.textContent = '(0)';
+            attributesList.innerHTML = '<div style="opacity: 0.5; grid-column: 1/-1; text-align: center;">Starting generation...</div>';
+            resetBatchChart();
+            previousUniqueCount = 0; // Reset for chart tracking
+            
+            startBtn.disabled = true;
+            startBtn.classList.add('loading');
+            
+            try {
+                const requestData = {
+                    topic: topic,
+                    producer_count: producerCount
+                };
+                
+                if (iterations) {
+                    requestData.iterations = iterations;
+                }
+                
+                const result = await callAPI('/api/start', 'POST', requestData);
+                
+                log('✅ ' + result.message, 'success');
+                isGenerating = true;
+                updateButtons();
+                
+                // Stats will be updated via WebSocket push notifications
+                
+            } catch (error) {
+                // Error already logged in callAPI
+            } finally {
+                startBtn.disabled = false;
+                startBtn.classList.remove('loading');
+                updateButtons();
+            }
+        };
+        
+        stopBtn.onclick = async () => {
+            stopBtn.disabled = true;
+            stopBtn.classList.add('loading');
+            
+            try {
+                const result = await callAPI('/api/stop', 'POST');
+                log('🛑 ' + result.message, 'success');
+                isGenerating = false;
+                updateButtons();
+                
+            } catch (error) {
+                // Error already logged in callAPI
+            } finally {
+                stopBtn.disabled = false;
+                stopBtn.classList.remove('loading');
+                updateButtons();
+            }
+        };
+        
+        // Update buttons when topic changes
+        topicInput.addEventListener('input', updateButtons);
+        
+        // Chart.js Chart functions
+        function initializeBatchChart() {
+            // Don't recreate if chart already exists
+            if (batchChart) return;
+            
+            const ctx = document.getElementById('batchChart').getContext('2d');
+            
+            // Set initial canvas size
+            const canvas = document.getElementById('batchChart');
+            canvas.style.width = '800px';
+            canvas.width = 800;
+            
+            batchChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: [], // Start with empty labels
+                    datasets: [{
+                        label: 'New Unique Attributes',
+                        data: [], // Start with empty data
+                        backgroundColor: 'rgba(102, 126, 234, 0.7)',
+                        borderColor: 'rgba(102, 126, 234, 1)',
+                        borderWidth: 1,
+                        barThickness: 20, // Fixed bar width instead of maxBarThickness
+                        categoryPercentage: 0.8,
+                        barPercentage: 0.9
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            suggestedMax: 50, // Use suggestedMax instead of max for dynamic scaling
+                            title: {
+                                display: true,
+                                text: 'New Unique Attributes',
+                                color: '#ffffff'
+                            },
+                            ticks: {
+                                color: '#ffffff',
+                                stepSize: 5
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time (Diminishing Returns)',
+                                color: '#ffffff'
+                            },
+                            ticks: {
+                                color: '#ffffff',
+                                maxRotation: 45,
+                                callback: function(value, index) {
+                                    // Show every 3rd label to avoid crowding
+                                    return index % 3 === 0 ? this.getLabelForValue(value) : '';
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        title: {
+                            display: true,
+                            text: 'Diminishing Returns: New Unique Attributes Per Batch',
+                            color: '#ffffff'
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: '#ffffff',
+                            bodyColor: '#ffffff',
+                            borderColor: 'rgba(102, 126, 234, 1)',
+                            borderWidth: 1,
+                            callbacks: {
+                                title: function(context) {
+                                    return 'Time: ' + context[0].label;
+                                },
+                                label: function(context) {
+                                    return 'New Attributes: ' + context.parsed.y;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            
+            console.log('📊 Chart initialized with', batchData.length, 'bars');
+        }
+        
+        function updateBatchChart(batchSize) {
+            // Add new data with timestamp
+            const now = new Date();
+            const timeLabel = now.toLocaleTimeString('en-US', { 
+                hour12: false, 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit' 
+            });
+            
+            batchData.push({
+                time: timeLabel,
+                value: batchSize
+            });
+            
+            console.log('📊 Added batch to chart:', timeLabel, 'new unique count:', batchSize, 'total batches:', batchData.length);
+            
+            // Keep only last 30 batches for better visualization
+            if (batchData.length > 30) {
+                batchData.shift();
+            }
+            
+            // If chart doesn't exist, create it
+            if (!batchChart) {
+                initializeBatchChart();
+                // Add the data point after initialization
+                batchChart.data.labels.push(timeLabel);
+                batchChart.data.datasets[0].data.push(batchSize);
+                batchChart.update('none');
+                return;
+            }
+            
+            // Add new data point to existing chart
+            batchChart.data.labels.push(timeLabel);
+            batchChart.data.datasets[0].data.push(batchSize);
+            
+            // Remove old data if we exceed 30 points
+            if (batchChart.data.labels.length > 30) {
+                batchChart.data.labels.shift();
+                batchChart.data.datasets[0].data.shift();
+            }
+            
+            // Calculate new canvas width based on number of bars
+            // Using barThickness of 20px plus some spacing
+            const barSpacing = 30; // 20px bar + 10px spacing
+            const minWidth = 800;
+            const padding = 100; // Extra padding for y-axis labels
+            const requiredWidth = Math.max(minWidth, batchChart.data.labels.length * barSpacing + padding);
+            
+            // Update canvas size for horizontal scrolling
+            const canvas = document.getElementById('batchChart');
+            canvas.style.width = requiredWidth + 'px';
+            canvas.width = requiredWidth;
+            
+            // Force chart resize
+            batchChart.resize();
+            
+            // Update the chart with no animation for smooth updates
+            batchChart.update('none');
+            
+            console.log('📊 Chart updated: now has', batchChart.data.labels.length, 'bars, canvas width:', requiredWidth + 'px');
+            
+            // Auto-scroll to show latest data
+            const chartContainer = canvas.parentElement;
+            setTimeout(() => {
+                chartContainer.scrollLeft = chartContainer.scrollWidth - chartContainer.clientWidth;
+                console.log('↪️ Scrolled chart container to show latest data');
+            }, 50);
+        }
+        
+        function resetBatchChart() {
+            batchData = [];
+            if (batchChart) {
+                batchChart.destroy();
+                batchChart = null;
+            }
+            
+            // Reset canvas size
+            const canvas = document.getElementById('batchChart');
+            canvas.style.width = '800px';
+            canvas.width = 800;
+        }
+        
+        // Initialize
+        connectWebSocket();
+        updateButtons();
+        initializeBatchChart(); // Initialize empty chart on page load
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (reconnectInterval) {
+                clearTimeout(reconnectInterval);
+            }
+            if (pingInterval) {
+                clearInterval(pingInterval);
+            }
+            if (ws) {
+                ws.close();
+            }
+        });
+    </script>
 </body>
 </html>

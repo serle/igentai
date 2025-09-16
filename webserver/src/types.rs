@@ -1,140 +1,330 @@
-//! Type definitions for webserver
-//!
-//! This module contains all the data types, enums, and structs used by the webserver
-//! that are not service traits.
+//! WebServer-specific types and messages
 
-use tokio::sync::mpsc;
-use axum::extract::ws::Message;
-use shared::SystemMetrics;
+use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
+use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
-/// Client identifier for WebSocket connections
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ClientId(pub String);
+use shared::{SystemMetrics, ProcessId, ProviderMetadata, OrchestratorUpdate};
+use shared::messages::webserver::CompletionReason;
 
-impl ClientId {
-    pub fn new() -> Self {
-        Self(uuid::Uuid::new_v4().to_string())
+/// WebServer configuration
+#[derive(Debug, Clone)]
+pub struct WebServerConfig {
+    pub process_id: ProcessId,
+    pub http_port: u16,
+    pub api_port: u16,
+    pub static_dir: String,
+    pub orchestrator_addr: std::net::SocketAddr,
+    pub standalone_mode: bool,
+}
+
+impl WebServerConfig {
+    pub fn new(http_port: u16, api_port: u16, orchestrator_addr: std::net::SocketAddr) -> Self {
+        Self {
+            process_id: ProcessId::WebServer, // Will be overridden by singleton
+            http_port,
+            api_port,
+            static_dir: "./static".to_string(),
+            orchestrator_addr,
+            standalone_mode: false,
+        }
     }
 }
 
-/// WebSocket message types between browser and webserver
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type")]
-pub enum BrowserMessage {
-    #[serde(rename = "start_topic")]
-    StartTopic {
-        topic: String,
-        producer_count: u32,
-        prompt: Option<String>,
-    },
-    #[serde(rename = "stop_generation")]
-    StopGeneration,
-    #[serde(rename = "request_dashboard")]
-    RequestDashboard,
-    #[serde(rename = "metrics_update")]
-    MetricsUpdate {
-        metrics: SystemMetrics,
-    },
-    #[serde(rename = "attribute_batch")]
-    AttributeBatch {
-        attributes: Vec<String>,
-        topic: String,
-    },
-    #[serde(rename = "system_alert")]
-    SystemAlert {
-        level: AlertLevel,
-        message: String,
-        timestamp: u64,
-    },
-    #[serde(rename = "dashboard_data")]
-    DashboardData {
-        metrics: SystemMetrics,
-        recent_attributes: Vec<AttributeUpdate>,
-        system_health: SystemHealth,
-    },
-}
-
-/// Alert levels for system messages
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum AlertLevel {
-    Info,
-    Success,
-    Warning,
-    Error,
-}
-
-/// Attribute update from orchestrator
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AttributeUpdate {
-    pub attribute: String,
-    pub topic: String,
-    pub producer_id: String,
-    pub timestamp: u64,
-}
-
-/// System health information
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SystemHealth {
-    pub orchestrator_connected: bool,
-    pub active_clients: u32,
-    pub last_update: Option<u64>,
-    pub server_uptime_seconds: u64,
-}
-
-/// Dashboard data bundle
+/// Client session information
 #[derive(Debug, Clone)]
-pub struct DashboardData {
-    pub metrics: SystemMetrics,
-    pub recent_attributes: Vec<AttributeUpdate>,
-    pub system_health: SystemHealth,
+pub struct ClientSession {
+    pub id: Uuid,
+    pub connected_at: DateTime<Utc>,
+    pub last_activity: DateTime<Utc>,
+    pub client_info: ClientInfo,
 }
 
 /// Client connection information
-#[derive(Debug)]
-pub struct ClientConnection {
-    pub id: ClientId,
-    pub websocket_tx: mpsc::Sender<Message>,
-    pub connected_at: std::time::Instant,
-    pub last_ping: std::time::Instant,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientInfo {
     pub user_agent: Option<String>,
+    pub ip_address: String,
 }
 
-/// Key-value pair for configuration
-#[derive(Debug, Clone)]
-pub struct KeyValuePair {
-    pub key: String,
-    pub value: String,
+/// WebSocket messages sent to browser clients
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum ClientMessage {
+    /// Dashboard data update
+    #[serde(rename = "dashboard_update")]
+    DashboardUpdate {
+        timestamp: u64,
+        metrics: SystemMetrics,
+        insights: Vec<OptimizationInsight>,
+    },
+
+    /// Real-time attribute feed
+    #[serde(rename = "attribute_update")]
+    AttributeUpdate {
+        attributes: Vec<String>,
+        producer_id: ProcessId,
+        metadata: ProviderMetadata,
+        uniqueness_ratio: f64,
+    },
+
+    /// System status change
+    #[serde(rename = "status_update")]
+    StatusUpdate {
+        orchestrator_connected: bool,
+        active_producers: u32,
+        current_topic: Option<String>,
+        system_health: SystemHealth,
+    },
+
+    /// Alert notification
+    #[serde(rename = "alert")]
+    Alert {
+        level: AlertLevel,
+        title: String,
+        message: String,
+        timestamp: u64,
+        dismissible: bool,
+    },
+
+    /// Connection acknowledgment
+    #[serde(rename = "connection_ack")]
+    ConnectionAck {
+        session_id: Uuid,
+        server_time: u64,
+    },
+    
+    /// Real-time statistics update
+    #[serde(rename = "statistics_update")]
+    StatisticsUpdate {
+        timestamp: u64,
+        active_producers: u32,
+        current_topic: Option<String>,
+        total_unique_attributes: usize,
+        metrics: SystemMetrics,
+    },
+    
+    /// Generation completed notification
+    #[serde(rename = "generation_complete")]
+    GenerationComplete {
+        timestamp: u64,
+        topic: String,
+        total_iterations: u32,
+        final_unique_count: usize,
+        completion_reason: CompletionReason,
+    },
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Browser-to-server WebSocket messages (now only for read operations and pings)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum ClientRequest {
+    /// Request dashboard data
+    #[serde(rename = "get_dashboard")]
+    GetDashboard,
 
-    #[test]
-    fn test_client_id_generation() {
-        let id1 = ClientId::new();
-        let id2 = ClientId::new();
-        assert_ne!(id1, id2, "Client IDs should be unique");
+    /// Ping for connection health
+    #[serde(rename = "ping")]
+    Ping,
+}
+
+/// Optimization insights for UI display
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimizationInsight {
+    pub insight_type: InsightType,
+    pub title: String,
+    pub description: String,
+    pub confidence: f64,
+    pub impact_score: f64,
+    pub recommendation: Option<String>,
+    pub timestamp: u64,
+}
+
+/// Types of optimization insights
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InsightType {
+    #[serde(rename = "cost_efficiency")]
+    CostEfficiency,
+    #[serde(rename = "performance_optimization")]
+    PerformanceOptimization,
+    #[serde(rename = "provider_health")]
+    ProviderHealth,
+    #[serde(rename = "routing_strategy")]
+    RoutingStrategy,
+}
+
+/// Alert severity levels
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AlertLevel {
+    #[serde(rename = "info")]
+    Info,
+    #[serde(rename = "warning")]
+    Warning,
+    #[serde(rename = "error")]
+    Error,
+    #[serde(rename = "success")]
+    Success,
+}
+
+/// System health status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SystemHealth {
+    #[serde(rename = "healthy")]
+    Healthy,
+    #[serde(rename = "degraded")]
+    Degraded,
+    #[serde(rename = "unhealthy")]
+    Unhealthy,
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+
+/// Dashboard analytics data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardData {
+    pub performance_metrics: PerformanceMetrics,
+    pub provider_breakdown: HashMap<shared::ProviderId, ProviderStats>,
+    pub producer_breakdown: HashMap<ProcessId, ProducerStats>,
+    pub recent_activity: Vec<ActivityEvent>,
+    pub system_alerts: Vec<Alert>,
+}
+
+/// Performance metrics for dashboard
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceMetrics {
+    pub uam_current: f64,
+    pub uam_trend: TrendDirection,
+    pub cost_per_minute: f64,
+    pub cost_efficiency: f64,
+    pub token_efficiency: f64,
+    pub total_unique_count: u64,
+    pub uptime_seconds: u64,
+}
+
+/// Provider statistics for UI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderStats {
+    pub uam: f64,
+    pub cost_per_minute: f64,
+    pub success_rate: f64,
+    pub avg_response_time_ms: f64,
+    pub health_score: f64,
+    pub status: shared::ProviderStatus,
+}
+
+/// Producer statistics for UI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProducerStats {
+    pub uam: f64,
+    pub cost_per_minute: f64,
+    pub uniqueness_ratio: f64,
+    pub status: shared::ProcessStatus,
+    pub last_activity: u64,
+}
+
+/// Activity events for recent activity feed
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityEvent {
+    pub event_type: ActivityType,
+    pub message: String,
+    pub timestamp: u64,
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Types of system activities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ActivityType {
+    #[serde(rename = "generation_started")]
+    GenerationStarted,
+    #[serde(rename = "generation_stopped")]
+    GenerationStopped,
+    #[serde(rename = "producer_spawned")]
+    ProducerSpawned,
+    #[serde(rename = "producer_failed")]
+    ProducerFailed,
+    #[serde(rename = "optimization_applied")]
+    OptimizationApplied,
+    #[serde(rename = "attributes_generated")]
+    AttributesGenerated,
+}
+
+/// Trend direction indicator
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TrendDirection {
+    #[serde(rename = "up")]
+    Up,
+    #[serde(rename = "down")]
+    Down,
+    #[serde(rename = "stable")]
+    Stable,
+}
+
+/// Alert structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Alert {
+    pub id: Uuid,
+    pub level: AlertLevel,
+    pub title: String,
+    pub message: String,
+    pub timestamp: u64,
+    pub dismissible: bool,
+    pub acknowledged: bool,
+}
+
+/// Helper function to convert orchestrator updates to client messages
+pub fn convert_orchestrator_update(update: OrchestratorUpdate) -> Vec<ClientMessage> {
+    match update {
+        OrchestratorUpdate::NewAttributes(attrs) => {
+            vec![ClientMessage::AttributeUpdate {
+                attributes: attrs,
+                producer_id: ProcessId::current().clone(), // Would need actual producer ID from update
+                metadata: create_default_provider_metadata(), // Helper function
+                uniqueness_ratio: 1.0, // Would be calculated
+            }]
+        },
+        
+        OrchestratorUpdate::StatisticsUpdate { timestamp, active_producers, current_topic, total_unique_attributes, metrics } => {
+            vec![ClientMessage::StatisticsUpdate {
+                timestamp,
+                active_producers,
+                current_topic,
+                total_unique_attributes,
+                metrics,
+            }]
+        },
+        
+        OrchestratorUpdate::GenerationComplete { timestamp, topic, total_iterations, final_unique_count, completion_reason } => {
+            vec![ClientMessage::GenerationComplete {
+                timestamp,
+                topic,
+                total_iterations,
+                final_unique_count,
+                completion_reason,
+            }]
+        },
+        
+        OrchestratorUpdate::ErrorNotification(error_msg) => {
+            vec![ClientMessage::Alert {
+                level: AlertLevel::Error,
+                title: "System Error".to_string(),
+                message: error_msg,
+                timestamp: Utc::now().timestamp() as u64,
+                dismissible: true,
+            }]
+        },
+        
+        _ => vec![], // Handle other update types as needed
     }
+}
 
-    #[test]
-    fn test_browser_message_serialization() {
-        let message = BrowserMessage::StartTopic {
-            topic: "test topic".to_string(),
-            producer_count: 5,
-            prompt: Some("custom prompt".to_string()),
-        };
-        
-        let serialized = serde_json::to_string(&message).unwrap();
-        let deserialized: BrowserMessage = serde_json::from_str(&serialized).unwrap();
-        
-        match deserialized {
-            BrowserMessage::StartTopic { topic, producer_count, prompt } => {
-                assert_eq!(topic, "test topic");
-                assert_eq!(producer_count, 5);
-                assert_eq!(prompt, Some("custom prompt".to_string()));
-            }
-            _ => panic!("Wrong message type after deserialization"),
-        }
+/// Helper function to create default provider metadata
+fn create_default_provider_metadata() -> ProviderMetadata {
+    ProviderMetadata {
+        provider_id: shared::ProviderId::OpenAI,
+        model: "gpt-3.5-turbo".to_string(),
+        response_time_ms: 0,
+        tokens: shared::TokenUsage::default(),
+        request_timestamp: Utc::now().timestamp() as u64,
     }
 }
