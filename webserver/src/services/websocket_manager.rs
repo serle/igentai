@@ -109,8 +109,11 @@ impl WebSocketManager for RealWebSocketManager {
             let clients = self.clients.read().await;
 
             if clients.is_empty() {
+                warn!("📭 No WebSocket clients connected - message not broadcasted");
                 return Ok(());
             }
+
+            info!("📡 Preparing to broadcast message to {} clients", clients.len());
 
             clients
                 .iter()
@@ -120,6 +123,7 @@ impl WebSocketManager for RealWebSocketManager {
 
         let mut failed_clients = Vec::new();
         let mut success_count = 0;
+        let total_clients = client_senders.len();
 
         for (client_id, sender) in client_senders {
             match sender.try_send(message.clone()) {
@@ -146,7 +150,9 @@ impl WebSocketManager for RealWebSocketManager {
         }
 
         if success_count > 0 {
-            info!("📡 Broadcasted message to {} clients", success_count);
+            info!("✅ Successfully broadcasted message to {}/{} clients", success_count, total_clients);
+        } else {
+            warn!("❌ Failed to broadcast message to any clients");
         }
 
         Ok(())

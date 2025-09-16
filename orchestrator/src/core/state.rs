@@ -516,6 +516,7 @@ impl OrchestratorState {
     /// Add attributes from producer (compatibility method)
     pub fn add_attributes(
         &mut self,
+        producer_id: shared::ProcessId,
         attributes: Vec<String>,
         provider_metadata: &shared::ProviderMetadata,
     ) -> Vec<String> {
@@ -525,18 +526,16 @@ impl OrchestratorState {
         };
 
         // Record performance
-        if let Some(producer_id) = self.producers.keys().next().cloned() {
-            let unique_count = unique_attributes.len() as u64;
-            let total_count = attributes.len() as u64;
+        let unique_count = unique_attributes.len() as u64;
+        let total_count = attributes.len() as u64;
 
-            self.performance.record_contribution(
-                producer_id,
-                provider_metadata.provider_id,
-                unique_count,
-                total_count,
-                provider_metadata.tokens.clone(),
-            );
-        }
+        self.performance.record_contribution(
+            producer_id,
+            provider_metadata.provider_id,
+            unique_count,
+            total_count,
+            provider_metadata.tokens.clone(),
+        );
 
         unique_attributes
     }

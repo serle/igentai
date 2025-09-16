@@ -171,11 +171,9 @@ impl PerformanceTracker {
         // Update total metrics
         current_bucket.total_metrics.add(&metrics);
 
-        // Recalculate statistics if enough time has passed
-        if now.duration_since(self.last_stats_update) > Duration::from_secs(5) {
-            self.recalculate_stats();
-            self.last_stats_update = now;
-        }
+        // Recalculate statistics every time for real-time accuracy
+        self.recalculate_stats();
+        self.last_stats_update = now;
     }
 
     /// Get current performance statistics
@@ -213,12 +211,13 @@ impl PerformanceTracker {
 
     /// Get or create the current time bucket
     fn get_or_create_current_bucket(&mut self, now: Instant) -> &mut TimeBucket {
-        // Check if we need a new bucket
-        let needs_new_bucket = self.time_buckets.is_empty() || self.time_buckets.back().unwrap().end_time <= now;
+        // Check if we need a new bucket - current bucket is "full" if it's older than bucket_duration
+        let needs_new_bucket = self.time_buckets.is_empty() || 
+            now.duration_since(self.time_buckets.back().unwrap().start_time) >= self.bucket_duration;
 
         if needs_new_bucket {
             let start_time = now;
-            let end_time = now + self.bucket_duration;
+            let end_time = now + self.bucket_duration; // Still future, but won't be used for filtering
 
             let bucket = TimeBucket {
                 start_time,
@@ -252,10 +251,12 @@ impl PerformanceTracker {
         }
 
         let oldest = self.time_buckets.front().unwrap().start_time;
-        let newest = self.time_buckets.back().unwrap().end_time;
+        let newest = Instant::now(); // Use current time instead of future end_time
         let duration = newest.duration_since(oldest);
 
-        duration.as_secs_f64() / 60.0
+        // Ensure minimum duration to avoid division by zero
+        let min_duration = 1.0; // 1 second minimum
+        (duration.as_secs_f64() / 60.0).max(min_duration / 60.0)
     }
 
     /// Calculate overall metrics across all buckets

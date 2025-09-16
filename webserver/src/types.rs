@@ -270,13 +270,13 @@ pub struct Alert {
 }
 
 /// Helper function to convert orchestrator updates to client messages
-pub fn convert_orchestrator_update(update: OrchestratorUpdate) -> Vec<ClientMessage> {
+pub fn convert_to_websocket_message(update: OrchestratorUpdate) -> Vec<ClientMessage> {
     match update {
-        OrchestratorUpdate::NewAttributes(attrs) => {
+        OrchestratorUpdate::NewAttributes { attributes, provider_metadata } => {
             vec![ClientMessage::AttributeUpdate {
-                attributes: attrs,
+                attributes,
                 producer_id: ProcessId::current().clone(), // Would need actual producer ID from update
-                metadata: create_default_provider_metadata(), // Helper function
+                metadata: provider_metadata.unwrap_or_else(|| create_default_provider_metadata()),
                 uniqueness_ratio: 1.0,                     // Would be calculated
             }]
         }
@@ -328,10 +328,10 @@ pub fn convert_orchestrator_update(update: OrchestratorUpdate) -> Vec<ClientMess
 }
 
 /// Helper function to create default provider metadata
-fn create_default_provider_metadata() -> ProviderMetadata {
+pub fn create_default_provider_metadata() -> ProviderMetadata {
     ProviderMetadata {
-        provider_id: shared::ProviderId::OpenAI,
-        model: "gpt-3.5-turbo".to_string(),
+        provider_id: shared::ProviderId::Random,
+        model: "random-model".to_string(),
         response_time_ms: 0,
         tokens: shared::TokenUsage::default(),
         request_timestamp: Utc::now().timestamp() as u64,

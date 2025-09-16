@@ -178,7 +178,7 @@ where
 
     /// Main event loop - processes messages and coordinates the system
     pub async fn run(&mut self) -> OrchestratorResult<()> {
-        let mut metrics_interval = interval(Duration::from_secs(30));
+        let mut metrics_interval = interval(Duration::from_secs(3));
         let mut health_interval = interval(Duration::from_secs(10));
 
         loop {
@@ -627,7 +627,7 @@ where
 
         let unique_attributes = {
             let mut state = self.state.lock().await;
-            let unique_attrs = state.add_attributes(attributes, &provider_metadata);
+            let unique_attrs = state.add_attributes(producer_id.clone(), attributes, &provider_metadata);
 
             // Store unique attributes to filesystem
             if let Some(topic) = &state.context.topic {
@@ -646,7 +646,10 @@ where
                 unique_attributes.len()
             );
             // Always send to webserver if we have unique attributes
-            let update = OrchestratorUpdate::NewAttributes(unique_attributes);
+            let update = OrchestratorUpdate::NewAttributes {
+                attributes: unique_attributes,
+                provider_metadata: None, // TODO: Pass actual provider metadata from the batch
+            };
             self.communicator.send_webserver_update(update).await?;
         }
 
@@ -913,8 +916,11 @@ where
             (metrics, active_producers, current_topic, total_unique)
         };
 
-        // Send statistics update to webserver (if it exists)
-        if self.webserver_rx.is_some() {
+        // Send statistics update to webserver
+        {
+            process_debug!(ProcessId::current(), "📊 Sending StatisticsUpdate: UAM={:.2}, cost/min=${:.4}", 
+                          metrics.uam, metrics.cost_per_minute);
+            
             let update = OrchestratorUpdate::StatisticsUpdate {
                 timestamp: chrono::Utc::now().timestamp() as u64,
                 active_producers: active_producers as u32,
@@ -922,6 +928,7 @@ where
                 total_unique_attributes: total_unique,
                 metrics,
             };
+            
             self.communicator.send_webserver_update(update).await?;
         }
 

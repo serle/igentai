@@ -563,7 +563,7 @@ where
             batch_id: chrono::Utc::now().timestamp_millis() as u64,
             provider_metadata: shared::types::ProviderMetadata {
                 provider_id: provider,
-                model: format!("{provider:?}_model").to_lowercase(),
+                model: format!("{provider:?}-model").to_lowercase(),
                 response_time_ms: api_response.response_time_ms,
                 tokens: shared::types::TokenUsage {
                     // For Random provider, calculate realistic split; for others, rough split

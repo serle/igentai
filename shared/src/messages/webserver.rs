@@ -49,7 +49,10 @@ pub enum OrchestratorUpdate {
     },
 
     /// New attributes notification
-    NewAttributes(Vec<String>),
+    NewAttributes {
+        attributes: Vec<String>,
+        provider_metadata: Option<crate::types::ProviderMetadata>,
+    },
 
     /// Error notification
     ErrorNotification(String),

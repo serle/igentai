@@ -9,10 +9,10 @@ use uuid::Uuid;
 
 use crate::types::{
     ActivityEvent, ActivityType, Alert, AlertLevel, ClientMessage, ClientSession, DashboardData, OptimizationInsight,
-    PerformanceMetrics, SystemHealth, TrendDirection, convert_orchestrator_update,
+    PerformanceMetrics, SystemHealth, TrendDirection, convert_to_websocket_message, create_default_provider_metadata,
 };
 use shared::messages::webserver::CompletionReason;
-use shared::{OrchestratorUpdate, SystemMetrics};
+use shared::{OrchestratorUpdate, SystemMetrics, ProcessId};
 
 /// Central WebServer state containing all business logic
 pub struct WebServerState {
@@ -81,17 +81,17 @@ impl WebServerState {
         let mut client_messages = Vec::new();
 
         match update {
-            OrchestratorUpdate::NewAttributes(attrs) => {
+            OrchestratorUpdate::NewAttributes { ref attributes, .. } => {
                 // Add activity event
                 self.add_activity(ActivityEvent {
                     event_type: ActivityType::AttributesGenerated,
-                    message: format!("Generated {} new attributes", attrs.len()),
+                    message: format!("Generated {} new attributes", attributes.len()),
                     timestamp: Utc::now().timestamp() as u64,
-                    metadata: Some(serde_json::json!({ "count": attrs.len() })),
+                    metadata: Some(serde_json::json!({ "count": attributes.len() })),
                 });
 
-                // Convert to client message
-                client_messages.extend(convert_orchestrator_update(OrchestratorUpdate::NewAttributes(attrs)));
+                // Convert to WebSocket message using consistent pattern
+                client_messages.extend(convert_to_websocket_message(update.clone()));
             }
 
             OrchestratorUpdate::StatisticsUpdate {
@@ -118,7 +118,7 @@ impl WebServerState {
                 }
 
                 // Convert to client message
-                client_messages.extend(convert_orchestrator_update(OrchestratorUpdate::StatisticsUpdate {
+                client_messages.extend(convert_to_websocket_message(OrchestratorUpdate::StatisticsUpdate {
                     timestamp,
                     active_producers,
                     current_topic,
@@ -158,7 +158,7 @@ impl WebServerState {
                 });
 
                 // Convert to client message
-                client_messages.extend(convert_orchestrator_update(OrchestratorUpdate::GenerationComplete {
+                client_messages.extend(convert_to_websocket_message(OrchestratorUpdate::GenerationComplete {
                     timestamp,
                     topic,
                     total_iterations,
@@ -167,8 +167,8 @@ impl WebServerState {
                 }));
             }
 
-            OrchestratorUpdate::ErrorNotification(error_msg) => {
-                // Create alert
+            OrchestratorUpdate::ErrorNotification(ref error_msg) => {
+                // Create alert for internal tracking
                 let alert_id = Uuid::new_v4();
                 let alert = Alert {
                     id: alert_id,
@@ -182,13 +182,8 @@ impl WebServerState {
 
                 self.active_alerts.insert(alert_id, alert.clone());
 
-                client_messages.push(ClientMessage::Alert {
-                    level: AlertLevel::Error,
-                    title: "System Error".to_string(),
-                    message: error_msg,
-                    timestamp: Utc::now().timestamp() as u64,
-                    dismissible: true,
-                });
+                // Convert to WebSocket message using consistent pattern
+                client_messages.extend(convert_to_websocket_message(update.clone()));
             }
 
             _ => {

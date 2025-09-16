@@ -22,6 +22,7 @@ use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info};
 
 use shared::OrchestratorUpdate;
+use crate::types::ClientMessage;
 // Handler wrapper functions for AppState
 use axum::Json;
 use axum::extract::{Path, State, WebSocketUpgrade};
@@ -261,16 +262,44 @@ where
     async fn handle_orchestrator_update(&self, update: OrchestratorUpdate) -> WebServerResult<()> {
         debug!("📨 Received orchestrator update: {:?}", update);
 
+        // Check connected clients
+        let client_count = self.websocket_manager.client_count().await;
+        info!("📊 Processing update with {} WebSocket clients connected", client_count);
+
         // Process update through state
         let client_messages = {
             let mut state = self.state.lock().await;
             state.process_orchestrator_update(update)
         };
 
-        debug!("📤 Broadcasting {} client messages", client_messages.len());
+        info!("📤 Broadcasting {} client messages to {} clients", client_messages.len(), client_count);
 
         // Broadcast messages to connected clients
         for message in client_messages {
+            match &message {
+                ClientMessage::StatisticsUpdate { metrics, .. } => {
+                    info!("🔄 Broadcasting StatisticsUpdate: UAM={:.2}, cost/min=${:.4}", 
+                          metrics.uam, metrics.cost_per_minute);
+                }
+                ClientMessage::AttributeUpdate { attributes, .. } => {
+                    info!("🔄 Broadcasting AttributeUpdate: {} attributes", attributes.len());
+                }
+                ClientMessage::GenerationComplete { topic, .. } => {
+                    info!("🔄 Broadcasting GenerationComplete: topic={}", topic);
+                }
+                ClientMessage::Alert { level, title, .. } => {
+                    info!("🔄 Broadcasting Alert: level={:?}, title={}", level, title);
+                }
+                ClientMessage::StatusUpdate { .. } => {
+                    info!("🔄 Broadcasting StatusUpdate");
+                }
+                ClientMessage::DashboardUpdate { .. } => {
+                    info!("🔄 Broadcasting DashboardUpdate");
+                }
+                ClientMessage::ConnectionAck { .. } => {
+                    info!("🔄 Broadcasting ConnectionAck");
+                }
+            }
             debug!("Broadcasting message: {:?}", message);
             self.websocket_manager.broadcast(message).await?;
         }
