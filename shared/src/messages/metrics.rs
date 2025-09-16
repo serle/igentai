@@ -1,6 +1,6 @@
 //! Metrics and statistics message types
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Bloom filter statistics for tracking deduplication performance
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,12 +14,7 @@ pub struct BloomFilterStats {
 }
 
 impl BloomFilterStats {
-    pub fn new(
-        total_items: usize,
-        unique_items: usize,
-        duplicate_items: usize,
-        filtered_count: usize,
-    ) -> Self {
+    pub fn new(total_items: usize, unique_items: usize, duplicate_items: usize, filtered_count: usize) -> Self {
         Self {
             total_items,
             unique_items,

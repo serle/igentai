@@ -1,6 +1,6 @@
 # Concurrent LLM Orchestration System
 
-A distributed Rust system that orchestrates multiple LLM producers to exhaustively explore topics and generate unique attributes. The system uses dependency injection for testability and comprehensive end-to-end testing via distributed tracing.
+A distributed Rust system that orchestrates multiple LLM providers to explore topics and generate unique attributes. The system coordinates OpenAI, Anthropic, Gemini, and test providers to maximize content generation while eliminating duplicates across all sources.
 
 ## Architecture Overview
 
@@ -20,190 +20,186 @@ A distributed Rust system that orchestrates multiple LLM producers to exhaustive
 ```
 
 The system consists of:
-- **Orchestrator**: Central coordinator managing producer processes and deduplicating results
-- **Producers**: Individual processes calling LLM APIs (OpenAI, Anthropic, Gemini) to generate attributes
-- **WebServer**: Real-time web interface for metrics and control
-- **Tester**: End-to-end testing framework using distributed tracing for validation
+
+- **Orchestrator**: Central coordinator managing producer processes and eliminating duplicates
+- **Producers**: Individual processes calling LLM APIs to generate attributes
+- **WebServer**: Real-time web interface for monitoring and control
+- **Tester**: End-to-end testing framework using distributed tracing
 
 ## Quick Start
 
-### Build and Setup
+### 1. Build the System
 
 ```bash
-# Build all components for production
+# Build all components
 ./scripts/build.sh
-
-# Setup API keys (copy example.env to .env and configure)
-cp example.env .env
-# Edit .env with your OPENAI_API_KEY (minimum required)
 ```
 
-### Basic Usage
+### 2. Configure API Keys (Optional)
+
+For real LLM providers, set up your API keys:
 
 ```bash
-# Start the orchestrator with web interface
+# Copy the example environment file
+cp example.env .env
+
+# Edit .env and add your API keys (at minimum, OPENAI_API_KEY)
+# You can also set keys as environment variables
+export OPENAI_API_KEY="your-key-here"
+```
+
+### 3. Run the System
+
+Choose between two modes:
+
+#### Web Mode (Recommended for Interactive Use)
+
+```bash
+# Start with web interface at http://localhost:8080
 ./scripts/start.sh
 
-# Start with debug logging
+# With debug logging
 ./scripts/start.sh --log-level debug
 
-# Open your web browser to http://localhost:8080
-
-# Stop the orchestrator
+# Open your browser to http://localhost:8080
+# Stop with Ctrl+C or:
 ./scripts/stop.sh
 ```
 
-## CLI Mode
+#### CLI Mode (For Automated/Batch Processing)
 
-The orchestrator's CLI mode provides direct topic generation without requiring the web interface. This is the primary mode for batch processing and automated workflows.
+```bash
+# Direct command line usage - no web interface
+cargo run --bin orchestrator -- --topic "Your Topic" --producers 3
 
-### Key Features
+# With test provider (no API keys needed)
+cargo run --bin orchestrator -- --topic "Test Topic" --provider random --iterations 5
 
-- **Direct Topic Processing**: Specify topic and immediately start generation
-- **Configurable Producers**: Set number of concurrent LLM processes
-- **Multiple Providers**: Support for OpenAI, Anthropic, Gemini, and test providers
-- **Automatic Deduplication**: Maintains uniqueness across all producers using Bloom filters
-- **File Output**: Results saved to `./output/<topic>/attributes.txt`
+# Build first, then use the binary directly
+./scripts/build.sh
+./target/release/orchestrator --topic "Paris attractions" --producers 3
+```
 
-### CLI Options
+## Operating Modes Explained
+
+### Web Mode
+
+- **Best for**: Interactive exploration, monitoring, real-time control
+- **Features**: Live web dashboard, real-time metrics, visual progress tracking
+- **Access**: Open http://localhost:8080 in your browser
+- **Control**: Start/stop generation through web interface
+- **Output**: Files saved to `./output/<topic>/` plus web display
+
+### CLI Mode
+
+- **Best for**: Automated workflows, batch processing, scripting
+- **Features**: Direct command-line control, immediate execution, script integration
+- **Control**: All configuration through command-line flags
+- **Output**: Files saved to `./output/<topic>/` (or custom directory)
+- **Completion**: Automatically stops when iterations complete or manually with Ctrl+C
+
+## CLI Options
+
+The following are the most commonly used command-line options. For a complete list of all available options with detailed descriptions and defaults, use `--help`:
 
 ```bash
 ./target/release/orchestrator [OPTIONS]
 
-Key CLI Mode Options:
+Key Options:
   --topic <TOPIC>              Topic for generation (enables CLI mode)
   --producers <N>              Number of producer processes (default: 5)
-  --iterations <N>             Max iterations per producer (unlimited if not set)
-  --provider <PROVIDER>        "env" for real APIs, "test" for mock data
-  --request-size <SIZE>        Items per API call (default: 60)
+  --iterations <N>             Max iterations per producer (default: unlimited)
+  --provider <PROVIDER>        "env" for real APIs, "random" for test data
   --output <DIR>               Output directory (default: ./output/<topic>)
-  --log-level <LEVEL>          Log level: trace, debug, info, warn, error (default: info)
-  --trace-ep <URL>             Optional tracing endpoint URL
+  --log-level <LEVEL>          Logging detail: info, debug, trace (default: info)
+  --help                       Display all available options with full descriptions
 ```
 
-### Examples
+## Usage Examples
+
+### Test the System (No API Keys Required)
+
+```bash
+# Quick test with random provider
+./target/release/orchestrator --topic "Test Topic" --provider random --iterations 3 --producers 2
+```
+
+### Real Generation (Requires API Keys)
 
 ```bash
 # Basic generation
-./target/release/orchestrator --topic "Paris attractions" --producers 3
+./target/release/orchestrator --topic "Renewable Energy" --producers 3
 
-# With iteration limit
-./target/release/orchestrator --topic "Programming languages" --producers 5 --iterations 50
+# Limited iterations for cost control
+./target/release/orchestrator --topic "AI Ethics" --producers 5 --iterations 50
 
-# Limited run with custom output
-./target/release/orchestrator \
-  --topic "Machine learning concepts" \
-  --producers 3 \
-  --iterations 100 \
-  --output ./results/ml_concepts
-
-# Test mode (no API keys needed)
-./target/release/orchestrator --topic "Test topic" --providers 2 --provider test
-
-# Debug logging for troubleshooting
-./target/release/orchestrator --topic "Debug test" --providers 2 --provider test --log-level debug
+# Custom output location
+./target/release/orchestrator --topic "Space Technology" --output ./research/space --iterations 100
 ```
 
-## Testing Strategy
-
-The system employs a comprehensive testing approach built around dependency injection and end-to-end validation using the `tester` binary.
-
-### Dependency Injection Architecture
-
-All components use trait-based dependency injection for testability:
-
-```rust
-// Orchestrator with injected services
-let mut orchestrator = Orchestrator::new(
-    api_keys,      // ApiKeySource trait
-    communicator,  // Communicator trait  
-    file_system,   // FileSystem trait
-    process_manager, // ProcessManager trait
-);
-```
-
-This allows for:
-- **Mock implementations** for unit testing
-- **Real implementations** for production
-- **Test implementations** for end-to-end scenarios
-
-### The Tester Binary
-
-The `tester` binary provides end-to-end validation of the entire distributed system using distributed tracing as the primary testing mechanism.
-
-#### How It Works
-
-1. **Tracing-Based Testing**: Instead of mocking components, the tester starts real processes and uses distributed tracing to validate behavior
-2. **Topic-Centric API**: Tests are organized around "topics" - complete end-to-end workflows
-3. **Service Constellation Management**: Manages the lifecycle of orchestrator, producers, and webserver processes
-4. **Real-World Validation**: Tests actual IPC communication, file I/O, and LLM API interactions
-
-#### Running Tests
+### Web Mode Usage
 
 ```bash
-# Default test scenario (CLI mode with test provider)
+# Start web interface
+./scripts/start.sh
+
+# Then open http://localhost:8080 and:
+# 1. Enter a topic in the web form
+# 2. Set producer count and iterations
+# 3. Click "Start" to begin generation
+# 4. Watch real-time progress and results
+```
+
+## Output
+
+The system creates structured output in the specified directory:
+
+- `output.txt` - Plain text list of unique attributes
+- `output.json` - Structured JSON with metadata
+- `metadata.json` - Generation statistics and settings
+
+## Testing
+
+The system includes comprehensive testing capabilities:
+
+```bash
+# Run end-to-end tests with random provider
 cargo run --bin tester
 
-# WebServer mode testing (starts server, waits for HTTP requests)
+# Test web mode (starts server for manual testing)
 cargo run --bin tester -- --scenario webserver
 
-# Keep services running for manual debugging
+# Keep test environment running for debugging
 cargo run --bin tester -- --keep-running
-
-# Verbose tracing output
-cargo run --bin tester -- --verbose
 ```
 
-#### Test Framework API
+The testing framework uses distributed tracing to validate real system behavior across all components, providing more reliable validation than traditional mocking approaches.
 
-The tester provides a clean API for end-to-end testing:
+## System Requirements
 
-```rust
-// Configure test scenario
-let config = OrchestratorConfig::builder()
-    .topic("test_topic")
-    .producers(3)
-    .iterations(Some(10))
-    .build();
+- **Rust**: 1.70+ (included in sandbox)
+- **Memory**: 2GB+ recommended for multiple producers
+- **Network**: Internet access for LLM API calls
+- **API Keys**: At least OpenAI for real generation (optional for testing)
 
-// Start distributed system
-let mut constellation = ServiceConstellation::new(trace_endpoint);
-constellation.start_orchestrator(config).await?;
+## Troubleshooting
 
-// Wait for completion and validate via tracing
-if let Some(topic) = Topic::wait_for_topic("test_topic", collector, timeout).await {
-    assert!(topic.assert_completed().await);
-    assert!(topic.assert_min_attributes(20));
-    assert!(topic.assert_no_errors().await);
-    
-    topic.print_summary();
-}
-```
+### Common Issues
 
-#### Tracing-Based Validation
+**"OpenAI API key should start with 'sk-'"**
 
-The tester uses distributed tracing spans to validate system behavior:
+- Set a valid API key in `.env` file or environment variable
+- Or use `--provider random` for testing without API keys
 
-- **Process Lifecycle**: Validates orchestrator and producer startup/shutdown
-- **IPC Communication**: Verifies message passing between components
-- **API Interactions**: Confirms LLM API calls and responses
-- **File Operations**: Validates output file creation and content
-- **Error Handling**: Ensures graceful failure recovery
+**"Connection refused" or port errors**
 
-#### Benefits of This Approach
+- Stop existing processes: `./scripts/stop.sh`
+- Check no other services are using port 8080
 
-1. **Real System Testing**: Tests actual production code paths, not mocks
-2. **Distributed Validation**: Validates cross-process communication and coordination
-3. **Tracing Integration**: Provides detailed observability into test execution
-4. **Scalable**: Can test with varying numbers of producers and configurations
-5. **Debugging**: Trace data provides rich debugging information when tests fail
+**Low generation speed**
 
-### Test Scenarios
+- Increase producer count: `--producers N`
+- Check API key rate limits
+- Monitor with `--log-level debug`
 
-The tester includes several built-in scenarios:
-
-- **Basic**: Simple CLI mode validation with test provider
-- **Examples**: Comprehensive topic-based testing examples
-- **WebServer**: Interactive WebServer mode testing with HTTP API validation
-
-This testing strategy ensures the distributed system works correctly across all components while providing detailed observability into system behavior during test execution.
+Run with `--log-level debug` for detailed diagnostic information.

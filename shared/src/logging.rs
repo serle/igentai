@@ -1,13 +1,13 @@
 //! Shared logging utilities for consistent tracing across all processes
 
-use tracing::{info, error, Event, Subscriber};
-use tracing_subscriber::layer::Context;
-use chrono::{DateTime, Utc};
-use std::time::Duration;
-use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
-use tokio::sync::mpsc;
 use crate::types::ProcessId;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tracing::{Event, Subscriber, error, info};
+use tracing_subscriber::layer::Context;
 
 /// Tracing endpoint configuration
 #[derive(Debug, Clone)]
@@ -46,17 +46,17 @@ pub struct HttpTracingLayer {
 impl HttpTracingLayer {
     pub fn new(endpoint: TracingEndpoint) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<TraceEvent>();
-        
+
         // Spawn background task to batch and send events
         let endpoint_url = endpoint.url.clone();
         let batch_size = endpoint.batch_size;
         let flush_interval = endpoint.flush_interval;
-        
+
         tokio::spawn(async move {
             let client = reqwest::Client::new();
             let mut events_buffer = Vec::with_capacity(batch_size);
             let mut flush_timer = tokio::time::interval(flush_interval);
-            
+
             loop {
                 tokio::select! {
                     // Receive new trace events
@@ -64,7 +64,7 @@ impl HttpTracingLayer {
                         match event {
                             Some(event) => {
                                 events_buffer.push(event);
-                                
+
                                 // Send batch if buffer is full
                                 if events_buffer.len() >= batch_size {
                                     Self::send_batch(&client, &endpoint_url, &mut events_buffer).await;
@@ -79,7 +79,7 @@ impl HttpTracingLayer {
                             }
                         }
                     }
-                    
+
                     // Periodic flush of buffered events
                     _ = flush_timer.tick() => {
                         if !events_buffer.is_empty() {
@@ -89,17 +89,13 @@ impl HttpTracingLayer {
                 }
             }
         });
-        
+
         HttpTracingLayer { sender: tx }
     }
-    
-    async fn send_batch(
-        client: &reqwest::Client,
-        endpoint_url: &str,
-        events_buffer: &mut Vec<TraceEvent>,
-    ) {
+
+    async fn send_batch(client: &reqwest::Client, endpoint_url: &str, events_buffer: &mut Vec<TraceEvent>) {
         let batch = std::mem::take(events_buffer);
-        
+
         match client
             .post(endpoint_url)
             .header("Content-Type", "application/json")
@@ -113,7 +109,7 @@ impl HttpTracingLayer {
                 }
             }
             Err(e) => {
-                eprintln!("Failed to send trace batch: {}", e);
+                eprintln!("Failed to send trace batch: {e}");
             }
         }
     }
@@ -127,14 +123,14 @@ where
         let metadata = event.metadata();
         let mut fields = HashMap::new();
         let mut message = String::new();
-        
+
         // Extract event fields and message
         let mut visitor = TraceVisitor {
             message: &mut message,
             fields: &mut fields,
         };
         event.record(&mut visitor);
-        
+
         let trace_event = TraceEvent {
             timestamp: Utc::now(),
             level: metadata.level().to_string(),
@@ -143,7 +139,7 @@ where
             process: ProcessId::current().to_string(),
             fields,
         };
-        
+
         // Send to background task (ignore errors if receiver is dropped)
         let _ = self.sender.send(trace_event);
     }
@@ -158,52 +154,48 @@ struct TraceVisitor<'a> {
 impl<'a> tracing::field::Visit for TraceVisitor<'a> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
-            self.message.push_str(&format!("{:?}", value));
+            self.message.push_str(&format!("{value:?}"));
         } else {
             self.fields.insert(
                 field.name().to_string(),
-                serde_json::Value::String(format!("{:?}", value)),
+                serde_json::Value::String(format!("{value:?}")),
             );
         }
     }
-    
+
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         if field.name() == "message" {
             self.message.push_str(value);
         } else {
-            self.fields.insert(
-                field.name().to_string(),
-                serde_json::Value::String(value.to_string()),
-            );
+            self.fields
+                .insert(field.name().to_string(), serde_json::Value::String(value.to_string()));
         }
     }
-    
+
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
         self.fields.insert(
             field.name().to_string(),
             serde_json::Value::Number(serde_json::Number::from(value)),
         );
     }
-    
+
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
         self.fields.insert(
             field.name().to_string(),
             serde_json::Value::Number(serde_json::Number::from(value)),
         );
     }
-    
+
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.fields.insert(
-            field.name().to_string(),
-            serde_json::Value::Bool(value),
-        );
+        self.fields
+            .insert(field.name().to_string(), serde_json::Value::Bool(value));
     }
 }
 
 /// Initialize tracing subscriber with optional endpoint and log level
 pub fn init_tracing_with_endpoint_and_level(endpoint: Option<TracingEndpoint>, log_level: Option<&str>) {
-    use tracing_subscriber::{fmt, EnvFilter, prelude::*};
-    
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
     // Determine log level - priority: CLI arg > ENV > default
     let level_filter = if let Some(level) = log_level {
         level.to_string()
@@ -212,16 +204,16 @@ pub fn init_tracing_with_endpoint_and_level(endpoint: Option<TracingEndpoint>, l
             .map(|f| f.to_string())
             .unwrap_or_else(|_| "info".to_string())
     };
-    
+
     let env_filter = EnvFilter::new(&level_filter);
-    
+
     match endpoint {
         Some(endpoint) => {
             println!("📡 Tracing endpoint configured: {}", endpoint.url);
-            println!("📊 Log level: {}", level_filter);
-            
+            println!("📊 Log level: {level_filter}");
+
             let http_layer = HttpTracingLayer::new(endpoint);
-            
+
             // Also add a minimal stdout layer for immediate feedback
             let fmt_layer = fmt::layer()
                 .with_target(true)
@@ -229,7 +221,7 @@ pub fn init_tracing_with_endpoint_and_level(endpoint: Option<TracingEndpoint>, l
                 .with_file(false)
                 .with_line_number(false)
                 .compact();
-                
+
             tracing_subscriber::registry()
                 .with(env_filter)
                 .with(http_layer)
@@ -237,7 +229,7 @@ pub fn init_tracing_with_endpoint_and_level(endpoint: Option<TracingEndpoint>, l
                 .init();
         }
         None => {
-            println!("📊 Log level: {}", level_filter);
+            println!("📊 Log level: {level_filter}");
             init_tracing_stdout_with_level(log_level);
         }
     }
@@ -259,20 +251,20 @@ fn init_tracing_stdout() {
 }
 
 fn init_tracing_stdout_with_level(log_level: Option<&str>) {
-    use tracing_subscriber::{fmt, EnvFilter};
-    
+    use tracing_subscriber::{EnvFilter, fmt};
+
     let process_id = ProcessId::current();
     let base_level = log_level.unwrap_or("info");
-    
+
     let env_filter = match process_id {
         ProcessId::Orchestrator => {
-            format!("orchestrator={},tower=warn,hyper=warn", base_level)
+            format!("orchestrator={base_level},tower=warn,hyper=warn")
         }
         ProcessId::Producer(_) => {
-            format!("producer={},reqwest=warn", base_level)
+            format!("producer={base_level},reqwest=warn")
         }
         ProcessId::WebServer => {
-            format!("webserver={},tower_http=debug,axum={}", base_level, base_level)
+            format!("webserver={base_level},tower_http=debug,axum={base_level}")
         }
     };
 
@@ -395,19 +387,19 @@ pub fn log_progress(process_id: &ProcessId, action: &str, details: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_process_id_display() {
         let producer_1 = ProcessId::Producer(1);
-        let producer_2 = ProcessId::Producer(2); 
+        let producer_2 = ProcessId::Producer(2);
         let orchestrator = ProcessId::Orchestrator;
         let webserver = ProcessId::WebServer;
-        
-        println!("Producer 1: {}", producer_1);
-        println!("Producer 2: {}", producer_2);
-        println!("Orchestrator: {}", orchestrator);
-        println!("WebServer: {}", webserver);
-        
+
+        println!("Producer 1: {producer_1}");
+        println!("Producer 2: {producer_2}");
+        println!("Orchestrator: {orchestrator}");
+        println!("WebServer: {webserver}");
+
         assert!(producer_1.to_string().starts_with("producer_"));
         assert!(producer_2.to_string().starts_with("producer_"));
         assert_eq!(orchestrator.to_string(), "orchestrator");

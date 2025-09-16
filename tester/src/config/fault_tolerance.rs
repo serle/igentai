@@ -1,9 +1,9 @@
 //! Fault Tolerance Testing Configuration
-//! 
+//!
 //! Extends the existing OrchestratorConfig with fault injection and healing test capabilities
 
-use std::time::Duration;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Fault injection scenarios for testing system resilience
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,16 +15,13 @@ pub enum FaultScenario {
         heal_within_seconds: u64,
     },
     /// Kill the orchestrator at specified iteration
-    KillOrchestrator {
-        after_iteration: u32,
-    },
+    KillOrchestrator { after_iteration: u32 },
     /// Kill all producers at specified iteration
     KillAllProducers {
         after_iteration: u32,
         heal_within_seconds: u64,
     },
 }
-
 
 /// Fault tolerance test configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

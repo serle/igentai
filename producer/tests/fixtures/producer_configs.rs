@@ -2,8 +2,8 @@
 
 #![allow(dead_code)] // Test utilities may not all be used currently
 
-use std::net::SocketAddr;
 use producer::types::ProducerConfig;
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 /// Create a test producer configuration
@@ -18,8 +18,7 @@ pub fn create_default_test_config() -> ProducerConfig {
 }
 
 /// Create a test producer configuration with custom ID
-pub fn create_test_config_with_id(orchestrator_addr: SocketAddr, topic: &str, id: Uuid) -> ProducerConfig {
-    let mut config = ProducerConfig::new(orchestrator_addr, topic.to_string());
-    config.id = id;
-    config
+/// Note: ProducerConfig doesn't have an id field, this function just creates a standard config
+pub fn create_test_config_with_id(orchestrator_addr: SocketAddr, topic: &str, _id: Uuid) -> ProducerConfig {
+    ProducerConfig::new(orchestrator_addr, topic.to_string())
 }

@@ -1,7 +1,7 @@
 //! WebServer error types and handling
 
-use thiserror::Error;
 use std::io;
+use thiserror::Error;
 
 /// WebServer result type
 pub type WebServerResult<T> = Result<T, WebServerError>;
@@ -45,27 +45,37 @@ pub enum WebServerError {
 impl WebServerError {
     /// Create communication error
     pub fn communication(message: impl Into<String>) -> Self {
-        Self::Communication { message: message.into() }
+        Self::Communication {
+            message: message.into(),
+        }
     }
 
     /// Create HTTP server error
     pub fn http(message: impl Into<String>) -> Self {
-        Self::Http { message: message.into() }
+        Self::Http {
+            message: message.into(),
+        }
     }
 
     /// Create WebSocket error
     pub fn websocket(message: impl Into<String>) -> Self {
-        Self::WebSocket { message: message.into() }
+        Self::WebSocket {
+            message: message.into(),
+        }
     }
 
     /// Create configuration error
     pub fn config(message: impl Into<String>) -> Self {
-        Self::Config { message: message.into() }
+        Self::Config {
+            message: message.into(),
+        }
     }
 
     /// Create internal error
     pub fn internal(message: impl Into<String>) -> Self {
-        Self::Internal { message: message.into() }
+        Self::Internal {
+            message: message.into(),
+        }
     }
 }
 

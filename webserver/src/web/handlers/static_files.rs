@@ -1,10 +1,10 @@
 //! Static file serving handlers
-//! 
+//!
 //! Serve frontend assets with proper caching and content types
 
 use axum::{
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{Html, Response},
 };
 use std::sync::Arc;
@@ -12,9 +12,7 @@ use std::sync::Arc;
 use crate::traits::StaticFileServer;
 
 /// Serve index.html for root path
-pub async fn serve_index<S>(
-    State(static_server): State<Arc<S>>,
-) -> Result<Html<String>, StatusCode>
+pub async fn serve_index<S>(State(static_server): State<Arc<S>>) -> Result<Html<String>, StatusCode>
 where
     S: StaticFileServer,
 {
@@ -22,7 +20,7 @@ where
         Ok(response) => {
             let content = String::from_utf8_lossy(&response.content).to_string();
             Ok(Html(content))
-        },
+        }
         Err(_) => {
             // Return a basic HTML page if index.html doesn't exist
             let html = r#"
@@ -97,16 +95,17 @@ where
             let mut response = Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, file_response.content_type);
-            
+
             // Add cache control if specified
             if let Some(cache_control) = file_response.cache_control {
                 response = response.header(header::CACHE_CONTROL, cache_control);
             }
-            
+
             let body = file_response.content;
-            response.body(body.into())
+            response
+                .body(body.into())
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-        },
+        }
         Err(_) => Err(StatusCode::NOT_FOUND),
     }
 }

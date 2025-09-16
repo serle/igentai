@@ -1,7 +1,7 @@
 //! Tests for Backoff routing strategy
 
-use shared::types::ProviderId;
 use crate::fixtures::CommandFactory;
+use shared::types::ProviderId;
 
 /// Test Backoff routing strategy command creation
 #[tokio::test]
@@ -13,19 +13,19 @@ async fn test_backoff_routing_strategy() {
         "Generate unique Japanese dishes",
         ProviderId::OpenAI,
     );
-    
+
     match &start_command {
-        shared::ProducerCommand::Start { 
-            command_id, 
-            topic, 
-            prompt, 
-            routing_strategy, 
-            generation_config 
+        shared::ProducerCommand::Start {
+            command_id,
+            topic,
+            prompt,
+            routing_strategy,
+            generation_config,
         } => {
             assert_eq!(*command_id, 1);
             assert_eq!(topic, "Japanese dishes");
             assert_eq!(prompt, "Generate unique Japanese dishes");
-            
+
             // Verify Backoff routing strategy
             match routing_strategy {
                 shared::types::RoutingStrategy::Backoff { provider } => {
@@ -33,7 +33,7 @@ async fn test_backoff_routing_strategy() {
                 }
                 _ => panic!("Expected Backoff routing strategy"),
             }
-            
+
             // Verify generation config optimized for test mode
             assert_eq!(generation_config.model, "gpt-4o-mini");
             assert_eq!(generation_config.batch_size, 1);
@@ -48,51 +48,36 @@ async fn test_backoff_routing_strategy() {
 /// Test Backoff routing strategy with different providers
 #[tokio::test]
 async fn test_backoff_routing_different_providers() {
-    let providers = vec![
-        ProviderId::OpenAI,
-        ProviderId::Anthropic,
-        ProviderId::Gemini,
-    ];
-    
+    let providers = vec![ProviderId::OpenAI, ProviderId::Anthropic, ProviderId::Gemini];
+
     for (i, provider) in providers.iter().enumerate() {
-        let start_command = CommandFactory::start_command_with_backoff(
-            i as u64 + 1,
-            "test topic",
-            "test prompt",
-            *provider,
-        );
-        
+        let start_command =
+            CommandFactory::start_command_with_backoff(i as u64 + 1, "test topic", "test prompt", *provider);
+
         match &start_command {
-            shared::ProducerCommand::Start { routing_strategy, .. } => {
-                match routing_strategy {
-                    shared::types::RoutingStrategy::Backoff { provider: p } => {
-                        assert_eq!(*p, *provider);
-                    }
-                    _ => panic!("Expected Backoff routing strategy"),
+            shared::ProducerCommand::Start { routing_strategy, .. } => match routing_strategy {
+                shared::types::RoutingStrategy::Backoff { provider: p } => {
+                    assert_eq!(*p, *provider);
                 }
-            }
+                _ => panic!("Expected Backoff routing strategy"),
+            },
             _ => panic!("Expected Start command"),
         }
     }
 }
 
 /// Test that Backoff strategy is single-provider focused
-#[tokio::test]  
+#[tokio::test]
 async fn test_backoff_single_provider_focus() {
-    let start_command = CommandFactory::start_command_with_backoff(
-        1,
-        "test",
-        "test prompt", 
-        ProviderId::Anthropic,
-    );
-    
+    let start_command = CommandFactory::start_command_with_backoff(1, "test", "test prompt", ProviderId::Anthropic);
+
     match &start_command {
         shared::ProducerCommand::Start { routing_strategy, .. } => {
             match routing_strategy {
                 shared::types::RoutingStrategy::Backoff { provider } => {
                     // Backoff should only have one provider
                     assert_eq!(*provider, ProviderId::Anthropic);
-                    
+
                     // Verify it's different from multi-provider strategies
                     // (this is a single provider, not a list)
                 }

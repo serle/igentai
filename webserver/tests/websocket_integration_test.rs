@@ -1,20 +1,20 @@
 //! WebSocket integration tests
-//! 
+//!
 //! Tests WebSocket connection handling, message routing, and client lifecycle
 
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
-use tokio::time::{timeout, Duration};
-use uuid::Uuid;
 use serde_json;
+use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc};
+use tokio::time::{Duration, timeout};
+use uuid::Uuid;
 
+use shared::{OrchestratorUpdate, WebServerRequest};
 use webserver::{
-    traits::{WebSocketManager, OrchestratorClient},
-    types::{ClientMessage, ClientRequest, AlertLevel},
-    services::RealWebSocketManager,
     WebServerResult,
+    services::RealWebSocketManager,
+    traits::{OrchestratorClient, WebSocketManager},
+    types::{AlertLevel, ClientMessage, ClientRequest},
 };
-use shared::{WebServerRequest, OrchestratorUpdate};
 
 // Mock orchestrator for WebSocket handler testing
 #[allow(dead_code)]
@@ -57,7 +57,7 @@ impl OrchestratorClient for TestOrchestratorClient {
     async fn initialize(&mut self) -> WebServerResult<()> {
         Ok(())
     }
-    
+
     async fn send_request(&self, request: WebServerRequest) -> WebServerResult<()> {
         let should_fail = {
             let fail_flag = self.should_fail.lock().await;
@@ -65,23 +65,25 @@ impl OrchestratorClient for TestOrchestratorClient {
         };
 
         if should_fail {
-            return Err(webserver::WebServerError::internal("Simulated orchestrator failure".to_string()));
+            return Err(webserver::WebServerError::internal(
+                "Simulated orchestrator failure".to_string(),
+            ));
         }
 
         let mut requests = self.requests.lock().await;
         requests.push(request);
         Ok(())
     }
-    
+
     async fn get_updates(&mut self) -> WebServerResult<mpsc::Receiver<OrchestratorUpdate>> {
         let (_tx, rx) = mpsc::channel(100);
         Ok(rx)
     }
-    
+
     async fn health_check(&self) -> WebServerResult<bool> {
         Ok(true)
     }
-    
+
     async fn disconnect(&self) -> WebServerResult<()> {
         Ok(())
     }
@@ -113,7 +115,7 @@ async fn test_websocket_client_lifecycle() {
 #[tokio::test]
 async fn test_websocket_message_broadcasting() {
     let websocket_manager = RealWebSocketManager::new();
-    
+
     // Add multiple clients
     let client1_id = Uuid::new_v4();
     let client2_id = Uuid::new_v4();
@@ -147,16 +149,19 @@ async fn test_websocket_message_broadcasting() {
     websocket_manager.broadcast(test_message.clone()).await.unwrap();
 
     // Verify all clients received the message
-    let received1 = timeout(Duration::from_millis(100), rx1.recv()).await
+    let received1 = timeout(Duration::from_millis(100), rx1.recv())
+        .await
         .expect("Client 1 should receive message")
         .expect("Message should not be None");
-    
-    let received2 = timeout(Duration::from_millis(100), rx2.recv()).await
+
+    let received2 = timeout(Duration::from_millis(100), rx2.recv())
+        .await
         .expect("Client 2 should receive message")
         .expect("Message should not be None");
-        
-    let received3 = timeout(Duration::from_millis(100), rx3.recv()).await
-        .expect("Client 3 should receive message") 
+
+    let received3 = timeout(Duration::from_millis(100), rx3.recv())
+        .await
+        .expect("Client 3 should receive message")
         .expect("Message should not be None");
 
     // Verify message contents (simplified comparison)
@@ -168,7 +173,7 @@ async fn test_websocket_message_broadcasting() {
 #[tokio::test]
 async fn test_websocket_individual_message_sending() {
     let websocket_manager = RealWebSocketManager::new();
-    
+
     let client1_id = Uuid::new_v4();
     let client2_id = Uuid::new_v4();
 
@@ -193,10 +198,14 @@ async fn test_websocket_individual_message_sending() {
         system_health: webserver::types::SystemHealth::Healthy,
     };
 
-    websocket_manager.send_to_client(client1_id, test_message).await.unwrap();
+    websocket_manager
+        .send_to_client(client1_id, test_message)
+        .await
+        .unwrap();
 
     // Verify only client1 received the message
-    let received1 = timeout(Duration::from_millis(100), rx1.recv()).await
+    let received1 = timeout(Duration::from_millis(100), rx1.recv())
+        .await
         .expect("Client 1 should receive message")
         .expect("Message should not be None");
 
@@ -230,7 +239,7 @@ async fn test_websocket_disconnected_client_cleanup() {
 
     let (tx, rx) = mpsc::channel(100);
     websocket_manager.add_client(client_id, tx).await.unwrap();
-    
+
     assert_eq!(websocket_manager.client_count().await, 1);
 
     // Drop the receiver to simulate client disconnection
@@ -255,12 +264,11 @@ async fn test_websocket_disconnected_client_cleanup() {
     // depending on the implementation details
 }
 
-
 #[tokio::test]
 async fn test_websocket_high_volume_messaging() {
     let websocket_manager = RealWebSocketManager::new();
     let client_id = Uuid::new_v4();
-    
+
     let (tx, mut rx) = mpsc::channel(1000);
     websocket_manager.add_client(client_id, tx).await.unwrap();
 
@@ -290,5 +298,9 @@ async fn test_websocket_high_volume_messaging() {
         received_count += 1;
     }
 
-    assert_eq!(received_count, message_count, "Should receive all {} messages", message_count);
+    assert_eq!(
+        received_count, message_count,
+        "Should receive all {} messages",
+        message_count
+    );
 }

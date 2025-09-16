@@ -3,20 +3,19 @@
 //! This crate provides the core types and message definitions used for
 //! communication between the orchestrator, producers, and webserver.
 
+pub mod logging;
 pub mod messages;
 pub mod types;
-pub mod logging;
 
 // Re-export commonly used types
 pub use types::{
-    ProviderId, ProcessId, ProviderMetadata, TokenUsage, SystemMetrics, ProcessStatus,
-    OptimizationMode, GenerationConstraints, RoutingStrategy, GenerationConfig,
-    ProducerMetrics, ProviderMetrics, ProviderStatus, RequestConfig, ApiFailure,
-    ProviderRequestMetadata, SharedError,
+    ApiFailure, GenerationConfig, GenerationConstraints, OptimizationMode, ProcessId, ProcessStatus, ProducerMetrics,
+    ProviderId, ProviderMetadata, ProviderMetrics, ProviderRequestMetadata, ProviderStatus, RequestConfig,
+    RoutingStrategy, SharedError, SystemMetrics, TokenUsage,
 };
 
 // Re-export message types
 pub use messages::{
-    webserver::{WebServerRequest, OrchestratorUpdate, TaskRequest, TaskUpdate},
-    producer::{OrchestratorCommand, ProducerUpdate, ProducerCommand, ProducerResponse},
+    producer::{OrchestratorCommand, ProducerCommand, ProducerResponse, ProducerUpdate},
+    webserver::{OrchestratorUpdate, TaskRequest, TaskUpdate, WebServerRequest},
 };

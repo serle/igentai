@@ -1,5 +1,5 @@
 //! Service implementations
-//! 
+//!
 //! This module contains real implementations of all service traits.
 //! These are the production implementations that handle actual I/O operations.
 

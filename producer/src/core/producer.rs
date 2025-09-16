@@ -1,29 +1,29 @@
 //! Functional producer implementation with unified execution model
-//! 
+//!
 //! This design uses:
-//! - Configuration-driven initialization 
+//! - Configuration-driven initialization
 //! - Strategy pattern for test vs production modes
 //! - Pure functions for business logic
 //! - Unified event loop for both modes
 //! - Composition over inheritance
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use std::collections::HashMap;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::interval;
 use uuid::Uuid;
 
-use crate::traits::{ApiClient, Communicator};
-use crate::core::{Processor, Metrics, PromptHandler};
-use crate::core::utils::{select_provider, build_api_request, should_retry_request};
 use crate::core::generator::CommandGenerator;
-use crate::types::{ProducerState, ApiRequest, ApiResponse, ExecutionConfig, ExecutionMode, CommandSource};
-use crate::error::{ProducerResult, ProducerError};
-use shared::{ProducerCommand, ProducerUpdate, ProviderId, ProcessId};
-use shared::{process_info, process_error, process_warn, process_debug};
-use shared::types::{RoutingStrategy, GenerationConfig, ProcessStatus};
+use crate::core::utils::{build_api_request, select_provider, should_retry_request};
+use crate::core::{Metrics, Processor, PromptHandler};
+use crate::error::{ProducerError, ProducerResult};
+use crate::traits::{ApiClient, Communicator};
+use crate::types::{ApiRequest, ApiResponse, CommandSource, ExecutionConfig, ExecutionMode, ProducerState};
 use shared::messages::producer::{ProducerPerformanceStats, ProducerSyncStatus};
+use shared::types::{GenerationConfig, ProcessStatus, RoutingStrategy};
+use shared::{process_debug, process_error, process_info, process_warn};
+use shared::{ProcessId, ProducerCommand, ProducerUpdate, ProviderId};
 
 // ============================================================================
 // Producer Implementation
@@ -37,19 +37,19 @@ where
 {
     // Configuration (immutable after construction)
     config: ExecutionConfig,
-    
+
     // Dependencies (injected, immutable)
     api_client: Arc<A>,
     communicator: Arc<RwLock<C>>,
-    
+
     // Business logic components
     processor: Arc<RwLock<Processor>>,
     metrics: Arc<RwLock<Metrics>>,
     prompt_handler: Arc<PromptHandler>,
-    
+
     // Runtime state
     state: Arc<RwLock<ProducerState>>,
-    
+
     // Control channels
     shutdown_tx: mpsc::Sender<()>,
     shutdown_rx: Option<mpsc::Receiver<()>>,
@@ -61,13 +61,9 @@ where
     C: Communicator + Send + Sync + 'static,
 {
     /// Create producer from unified configuration
-    pub fn new(
-        config: ExecutionConfig,
-        api_client: A,
-        communicator: C,
-    ) -> Self {
+    pub fn new(config: ExecutionConfig, api_client: A, communicator: C) -> Self {
         let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
-        
+
         Producer {
             api_client: Arc::new(api_client),
             communicator: Arc::new(RwLock::new(communicator)),
@@ -83,7 +79,11 @@ where
 
     /// Main unified run loop - same for both test and production modes
     pub async fn run(&mut self) -> ProducerResult<()> {
-        process_info!(ProcessId::current(), "🚀 Starting Producer in {:?} mode", format!("{:?}", self.config.mode));
+        process_info!(
+            ProcessId::current(),
+            "🚀 Starting Producer in {:?} mode",
+            format!("{:?}", self.config.mode)
+        );
 
         // Initialize metrics
         {
@@ -93,7 +93,7 @@ where
 
         // Initialize command source based on mode
         let command_source = self.initialize_command_source().await?;
-        
+
         // Start background tasks
         let status_reporter = self.start_status_reporter();
         let request_processor = self.start_request_processor().await?;
@@ -113,8 +113,11 @@ where
     async fn initialize_command_source(&self) -> ProducerResult<CommandSource> {
         match &self.config.mode {
             ExecutionMode::Production { .. } => {
-                process_info!(ProcessId::current(), "📡 Initializing production mode with orchestrator connection");
-                
+                process_info!(
+                    ProcessId::current(),
+                    "📡 Initializing production mode with orchestrator connection"
+                );
+
                 let (command_receiver, listen_port) = {
                     let mut communicator = self.communicator.write().await;
                     communicator.initialize().await?;
@@ -122,36 +125,37 @@ where
                     let listen_port = communicator.get_listen_port().unwrap_or(0);
                     (command_receiver, listen_port)
                 };
-                
+
                 // Send ready signal to orchestrator after IPC listener is initialized
                 let ready_msg = shared::ProducerUpdate::Ready {
                     producer_id: ProcessId::current().clone(),
                     listen_port,
                 };
-                
+
                 process_info!(ProcessId::current(), "📤 Sending ready signal to orchestrator");
                 {
                     let communicator = self.communicator.read().await;
                     if let Err(e) = communicator.send_update(ready_msg).await {
                         process_warn!(ProcessId::current(), "⚠️ Failed to send ready signal: {}", e);
                     } else {
-                        process_info!(ProcessId::current(),"✅ Ready signal sent to orchestrator");
+                        process_info!(ProcessId::current(), "✅ Ready signal sent to orchestrator");
                     }
                 }
-                
+
                 process_info!(ProcessId::current(), "✅ Connected to orchestrator successfully");
                 Ok(CommandSource::Orchestrator(command_receiver))
             }
             ExecutionMode::Standalone { max_iterations } => {
                 let available_providers = ExecutionConfig::detect_available_providers(&self.config.producer_config);
-                process_info!(ProcessId::current(),"🔧 Initializing standalone mode with providers {:?}", available_providers);
-                
-                let generator = CommandGenerator::new(
-                    available_providers,
-                    *max_iterations, 
-                    self.config.request_interval
+                process_info!(
+                    ProcessId::current(),
+                    "🔧 Initializing standalone mode with providers {:?}",
+                    available_providers
                 );
-                
+
+                let generator =
+                    CommandGenerator::new(available_providers, *max_iterations, self.config.request_interval);
+
                 Ok(CommandSource::Simulator(generator))
             }
         }
@@ -161,7 +165,7 @@ where
     async fn run_event_loop(&mut self, mut command_source: CommandSource) -> ProducerResult<()> {
         let mut shutdown_rx = self.shutdown_rx.take().unwrap();
         let mut command_interval = interval(Duration::from_millis(100));
-        
+
         loop {
             tokio::select! {
                 // Handle shutdown signal
@@ -169,15 +173,15 @@ where
                     process_info!(ProcessId::current(),"🛑 Shutting down Producer...");
                     break;
                 }
-                
+
                 // Check for commands (unified handling)
                 _ = command_interval.tick() => {
                     if let Some(command) = self.get_next_command(&mut command_source).await? {
                         if let Err(e) = self.handle_command(command).await {
                             process_error!(ProcessId::current(),"❌ Error handling command: {}", e);
-                            
+
                             // In orchestrator mode, if we can't communicate after retries, terminate
-                            if matches!(self.config.mode, ExecutionMode::Production { .. }) && 
+                            if matches!(self.config.mode, ExecutionMode::Production { .. }) &&
                                e.to_string().contains("Cannot communicate with orchestrator after retries") {
                                 process_error!(ProcessId::current(), "💀 Producer terminating: Command handler lost orchestrator connection");
                                 break;
@@ -187,7 +191,7 @@ where
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -208,7 +212,7 @@ where
                 let state = self.state.read().await;
                 let base_prompt = state.config.topic.clone();
                 drop(state);
-                
+
                 Ok(generator.next_command(&base_prompt))
             }
         }
@@ -219,7 +223,12 @@ where
         process_debug!(ProcessId::current(), "Processing command: {:?}", command);
 
         match command {
-            ProducerCommand::Start { prompt, routing_strategy, generation_config, .. } => {
+            ProducerCommand::Start {
+                prompt,
+                routing_strategy,
+                generation_config,
+                ..
+            } => {
                 let mut state = self.state.write().await;
                 if !state.is_running {
                     state.current_prompt = Some(prompt.clone());
@@ -229,16 +238,21 @@ where
                     process_info!("✅ Producer started with prompt: {}", prompt);
                 }
             }
-            
+
             ProducerCommand::Stop { .. } => {
                 let mut state = self.state.write().await;
                 if state.is_running {
                     state.stop();
-                    process_info!(ProcessId::current(),"⏹️ Producer stopped");
+                    process_info!(ProcessId::current(), "⏹️ Producer stopped");
                 }
             }
-            
-            ProducerCommand::UpdateConfig { prompt, routing_strategy, generation_config, .. } => {
+
+            ProducerCommand::UpdateConfig {
+                prompt,
+                routing_strategy,
+                generation_config,
+                ..
+            } => {
                 let mut state = self.state.write().await;
                 if let Some(new_prompt) = prompt {
                     state.current_prompt = Some(new_prompt);
@@ -249,13 +263,20 @@ where
                 if let Some(new_config) = generation_config {
                     state.generation_config = Some(new_config);
                 }
-                process_info!(ProcessId::current(),"🔄 Updated producer configuration");
+                process_info!(ProcessId::current(), "🔄 Updated producer configuration");
             }
-            
-            ProducerCommand::SyncCheck { sync_id, bloom_version, bloom_filter, seen_values, .. } => {
-                self.handle_sync_check(sync_id, bloom_version, bloom_filter, seen_values).await?;
+
+            ProducerCommand::SyncCheck {
+                sync_id,
+                bloom_version,
+                bloom_filter,
+                seen_values,
+                ..
+            } => {
+                self.handle_sync_check(sync_id, bloom_version, bloom_filter, seen_values)
+                    .await?;
             }
-            
+
             ProducerCommand::Ping { ping_id } => {
                 self.handle_ping(ping_id).await?;
             }
@@ -272,7 +293,11 @@ where
         bloom_filter: Option<Vec<u8>>,
         seen_values: Option<Vec<String>>,
     ) -> ProducerResult<()> {
-        process_info!("🔄 Processing SyncCheck: sync_id={}, bloom_version={:?}", sync_id, bloom_version);
+        process_info!(
+            "🔄 Processing SyncCheck: sync_id={}, bloom_version={:?}",
+            sync_id,
+            bloom_version
+        );
 
         // Update processor with bloom filter
         if let Some(values) = seen_values {
@@ -364,7 +389,7 @@ where
                 }
 
                 let base_prompt = prompt.unwrap();
-                
+
                 // Process request using pure functions
                 if let Err(e) = Self::process_single_request(
                     &api_client,
@@ -377,13 +402,19 @@ where
                     &generation_config,
                     &base_prompt,
                     &config,
-                ).await {
+                )
+                .await
+                {
                     process_error!(ProcessId::current(), "❌ Request processing failed: {}", e);
-                    
+
                     // In orchestrator mode, if we can't communicate with orchestrator after retries, terminate
-                    if matches!(config.mode, ExecutionMode::Production { .. }) && 
-                       e.to_string().contains("Failed to send update after") {
-                        process_error!(ProcessId::current(), "💀 Producer terminating: Cannot communicate with orchestrator after retries");
+                    if matches!(config.mode, ExecutionMode::Production { .. })
+                        && e.to_string().contains("Failed to send update after")
+                    {
+                        process_error!(
+                            ProcessId::current(),
+                            "💀 Producer terminating: Cannot communicate with orchestrator after retries"
+                        );
                         break;
                     }
                 }
@@ -408,17 +439,13 @@ where
     ) -> ProducerResult<()> {
         // Build enhanced prompt
         let provider = select_provider(routing_strategy, ProviderId::Random);
-        let enhanced_prompt = prompt_handler.build_enhanced_prompt(
-            base_prompt,
-            provider,
-            generation_config.as_ref(),
-            state,
-            processor,
-        ).await;
+        let enhanced_prompt = prompt_handler
+            .build_enhanced_prompt(base_prompt, provider, generation_config.as_ref(), state, processor)
+            .await;
 
         // Create request
         let request = build_api_request(routing_strategy, generation_config, enhanced_prompt, Uuid::new_v4());
-        
+
         // Record request
         {
             let mut metrics_guard = metrics.write().await;
@@ -432,7 +459,7 @@ where
         {
             let mut metrics_guard = metrics.write().await;
             metrics_guard.record_response_received(&response);
-            
+
             if response.success {
                 let cost = api_client.estimate_cost(provider, response.tokens_used);
                 metrics_guard.record_cost(provider, cost);
@@ -443,7 +470,7 @@ where
         if response.success {
             let mut processor_guard = processor.write().await;
             let processing_stats = processor_guard.process_response(response.clone())?;
-            
+
             if processing_stats.has_new_values() {
                 // Send attributes to orchestrator if connected, otherwise just log
                 if matches!(config.mode, ExecutionMode::Production { .. }) {
@@ -452,14 +479,18 @@ where
                         &processing_stats.new_values,
                         provider,
                         &response,
-                    ).await?;
+                    )
+                    .await?;
                 } else {
                     // Log for standalone mode
-                    process_debug!(ProcessId::current(), "✨ Found {} new attributes: {:?}", 
-                          processing_stats.new_values.len(),
-                          processing_stats.new_values.iter().take(3).collect::<Vec<_>>());
+                    process_debug!(
+                        ProcessId::current(),
+                        "✨ Found {} new attributes: {:?}",
+                        processing_stats.new_values.len(),
+                        processing_stats.new_values.iter().take(3).collect::<Vec<_>>()
+                    );
                 }
-                
+
                 // Record stats
                 let mut metrics_guard = metrics.write().await;
                 metrics_guard.record_processing_stats(&processing_stats);
@@ -476,35 +507,44 @@ where
         max_retries: u32,
     ) -> ProducerResult<ApiResponse> {
         let mut last_error = None;
-        
+
         for attempt in 0..=max_retries {
             match api_client.send_request(request.clone()).await {
                 Ok(response) => {
                     if response.success {
                         return Ok(response);
                     }
-                    
+
                     // Check if we should retry
                     if let Some(delay) = should_retry_request(&response, attempt, max_retries) {
-                        process_warn!(ProcessId::current(),"⏳ API error (attempt {}), retrying in {}ms", attempt + 1, delay.as_millis());
+                        process_warn!(
+                            ProcessId::current(),
+                            "⏳ API error (attempt {}), retrying in {}ms",
+                            attempt + 1,
+                            delay.as_millis()
+                        );
                         tokio::time::sleep(delay).await;
                         continue;
                     }
-                    
+
                     return Ok(response);
                 }
                 Err(e) => {
                     last_error = Some(e);
                     if attempt < max_retries {
                         let delay = Duration::from_millis(100 * (1 << attempt));
-                        process_warn!(ProcessId::current(), "⏳ Network error (attempt {}), retrying in {}ms", 
-                              attempt + 1, delay.as_millis());
+                        process_warn!(
+                            ProcessId::current(),
+                            "⏳ Network error (attempt {}), retrying in {}ms",
+                            attempt + 1,
+                            delay.as_millis()
+                        );
                         tokio::time::sleep(delay).await;
                     }
                 }
             }
         }
-        
+
         Err(last_error.unwrap_or_else(|| ProducerError::api("unknown", "Max retries exceeded")))
     }
 
@@ -523,19 +563,19 @@ where
             batch_id: chrono::Utc::now().timestamp_millis() as u64,
             provider_metadata: shared::types::ProviderMetadata {
                 provider_id: provider,
-                model: format!("{:?}_model", provider).to_lowercase(),
+                model: format!("{provider:?}_model").to_lowercase(),
                 response_time_ms: api_response.response_time_ms,
-                tokens: shared::types::TokenUsage { 
+                tokens: shared::types::TokenUsage {
                     // For Random provider, calculate realistic split; for others, rough split
                     input_tokens: if provider == shared::ProviderId::Random {
-                        (api_response.request_id.to_string().len() / 4) as u64  // Based on prompt length
+                        (api_response.request_id.to_string().len() / 4) as u64 // Based on prompt length
                     } else {
-                        (api_response.tokens_used / 3) as u64  // Input is typically smaller
+                        (api_response.tokens_used / 3) as u64 // Input is typically smaller
                     },
                     output_tokens: if provider == shared::ProviderId::Random {
                         api_response.tokens_used as u64 - (api_response.request_id.to_string().len() / 4) as u64
                     } else {
-                        ((api_response.tokens_used * 2) / 3) as u64  // Output is typically larger
+                        ((api_response.tokens_used * 2) / 3) as u64 // Output is typically larger
                     },
                 },
                 request_timestamp: api_response.timestamp.timestamp_millis() as u64,
@@ -544,8 +584,12 @@ where
 
         let communicator = communicator.read().await;
         communicator.send_update(update).await?;
-        process_debug!(ProcessId::current(), "📤 Sent {} attributes to orchestrator", attributes.len());
-        
+        process_debug!(
+            ProcessId::current(),
+            "📤 Sent {} attributes to orchestrator",
+            attributes.len()
+        );
+
         Ok(())
     }
 
@@ -565,7 +609,7 @@ where
 
                 // Send status updates when orchestrator is present (mandatory for fast termination detection)
                 if !has_orchestrator {
-                    continue; 
+                    continue;
                 }
 
                 let (is_running, current_topic) = {
@@ -580,10 +624,10 @@ where
 
                 let status_update = ProducerUpdate::StatusUpdate {
                     producer_id: ProcessId::current().clone(),
-                    status: if is_running { 
-                        ProcessStatus::Running 
-                    } else { 
-                        ProcessStatus::Stopped 
+                    status: if is_running {
+                        ProcessStatus::Running
+                    } else {
+                        ProcessStatus::Stopped
                     },
                     message: current_topic,
                     performance_stats: Some(ProducerPerformanceStats {
@@ -601,7 +645,10 @@ where
                 if let Err(e) = communicator.send_update(status_update).await {
                     process_error!(ProcessId::current(), "❌ Status update failed: {}", e);
                     if e.to_string().contains("Failed to send update after") {
-                        process_error!(ProcessId::current(), "💀 Orchestrator unreachable after retries - producer terminating NOW");
+                        process_error!(
+                            ProcessId::current(),
+                            "💀 Orchestrator unreachable after retries - producer terminating NOW"
+                        );
                         std::process::exit(1);
                     }
                 } else {
@@ -663,4 +710,3 @@ where
 
     Ok(Producer::new(config, api_client, communicator))
 }
-

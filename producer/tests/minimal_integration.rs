@@ -1,6 +1,6 @@
 //! Minimal producer tests to demonstrate architecture
 
-use producer::{ProducerError, ProducerConfig, Processor, Metrics};
+use producer::{Metrics, Processor, ProducerConfig, ProducerError};
 
 // Include integration test modules
 mod fixtures;
@@ -20,7 +20,7 @@ fn test_producer_architecture_basic() {
     // Test config creation
     let addr = "127.0.0.1:6001".parse().unwrap();
     let config = ProducerConfig::new(addr, "test topic".to_string());
-    
+
     assert_eq!(config.orchestrator_addr, addr);
     assert_eq!(config.topic, "test topic");
     assert_eq!(config.max_concurrent_requests, 10);
@@ -31,7 +31,7 @@ fn test_producer_architecture_basic() {
 #[test]
 fn test_producer_metrics_calculation() {
     use producer::types::ProducerMetrics;
-    
+
     let mut metrics = ProducerMetrics::new();
     metrics.attributes_extracted = 120;
     metrics.unique_attributes = 100;
@@ -50,13 +50,13 @@ fn test_producer_metrics_calculation() {
 fn test_processor_creation() {
     let processor = Processor::new();
     let stats = processor.get_stats();
-    
+
     assert_eq!(stats.total_unique_attributes, 0);
     assert_eq!(stats.bloom_filter_false_positive_rate, 0.01);
     assert_eq!(stats.bloom_filter_enabled, true); // Always enabled now
     assert_eq!(stats.duplicate_count, 0);
     assert_eq!(stats.total_processed, 0);
-    
+
     println!("✅ Processor creation works!");
 }
 
@@ -64,10 +64,10 @@ fn test_processor_creation() {
 fn test_metrics_creation() {
     let metrics = Metrics::new();
     let current = metrics.get_current_metrics();
-    
+
     assert_eq!(current.requests_sent, 0);
     assert_eq!(current.responses_received, 0);
     assert_eq!(current.attributes_extracted, 0);
-    
+
     println!("✅ Metrics creation works!");
 }

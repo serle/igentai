@@ -1,11 +1,10 @@
 //! Core types used throughout the orchestrator system
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use serde::{Serialize, Deserialize};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
-
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Global counter for producer numbering
 static PRODUCER_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -29,22 +28,22 @@ impl ProcessId {
     pub fn init_producer(id: u32) -> &'static ProcessId {
         PROCESS_ID.get_or_init(|| ProcessId::Producer(id))
     }
-    
+
     /// Initialize the global process ID for orchestrator
     pub fn init_orchestrator() -> &'static ProcessId {
         PROCESS_ID.get_or_init(|| ProcessId::Orchestrator)
     }
-    
+
     /// Initialize the global process ID for webserver
     pub fn init_webserver() -> &'static ProcessId {
         PROCESS_ID.get_or_init(|| ProcessId::WebServer)
     }
-    
+
     /// Get the global process ID (must be initialized first)
     pub fn current() -> &'static ProcessId {
         PROCESS_ID.get().expect("ProcessId not initialized - call init_* first")
     }
-    
+
     /// Reset producer counter (useful for testing)
     pub fn reset_producer_counter() {
         PRODUCER_COUNTER.store(0, Ordering::SeqCst);
@@ -54,7 +53,7 @@ impl ProcessId {
 impl fmt::Display for ProcessId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProcessId::Producer(id) => write!(f, "producer_{}", id),
+            ProcessId::Producer(id) => write!(f, "producer_{id}"),
             ProcessId::Orchestrator => write!(f, "orchestrator"),
             ProcessId::WebServer => write!(f, "webserver"),
         }
@@ -89,14 +88,14 @@ impl fmt::Display for ProviderId {
 
 impl std::str::FromStr for ProviderId {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "openai" => Ok(ProviderId::OpenAI),
             "anthropic" => Ok(ProviderId::Anthropic),
             "gemini" | "google" => Ok(ProviderId::Gemini),
             "random" => Ok(ProviderId::Random),
-            _ => Err(format!("Unknown provider: {}", s)),
+            _ => Err(format!("Unknown provider: {s}")),
         }
     }
 }
@@ -153,13 +152,13 @@ pub enum ProviderStatus {
 pub enum OptimizationMode {
     /// Maximize unique attributes per minute within budget
     MaximizeUAM { budget_per_minute: f64 },
-    
+
     /// Minimize cost while maintaining UAM target
     MinimizeCost { target_uam: f64 },
-    
+
     /// Balance efficiency (unique attributes per dollar)
     MaximizeEfficiency,
-    
+
     /// Custom weighted optimization
     Weighted {
         uam_weight: f64,
@@ -173,10 +172,10 @@ pub enum OptimizationMode {
 pub struct GenerationConstraints {
     /// Maximum cost per minute (USD)
     pub max_cost_per_minute: f64,
-    
+
     /// Target unique attributes per minute
     pub target_uam: f64,
-    
+
     /// Maximum total runtime (seconds)
     pub max_runtime_seconds: Option<u64>,
 }
@@ -186,13 +185,13 @@ pub struct GenerationConstraints {
 pub enum RoutingStrategy {
     /// Round-robin through providers
     RoundRobin { providers: Vec<ProviderId> },
-    
+
     /// Priority order (try first, then fallback)
     PriorityOrder { providers: Vec<ProviderId> },
-    
+
     /// Weighted distribution
     Weighted { weights: HashMap<ProviderId, f32> },
-    
+
     /// Single provider with exponential backoff (ideal for test mode)
     Backoff { provider: ProviderId },
 }
@@ -205,20 +204,20 @@ pub struct GenerationConfig {
     pub context_window: u32,
     pub max_tokens: u32,
     pub temperature: f32,
-    pub request_size: usize,  // Number of words/items to request
+    pub request_size: usize, // Number of words/items to request
 }
 
 /// Performance metrics for a producer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProducerMetrics {
-    pub uam: f64,                    // Unique attributes per minute
+    pub uam: f64, // Unique attributes per minute
     pub tokens_per_minute: f64,
     pub cost_per_minute: f64,
     pub unique_per_dollar: f64,
     pub unique_per_1k_tokens: f64,
-    pub uniqueness_ratio: f64,       // unique/total ratio
+    pub uniqueness_ratio: f64, // unique/total ratio
     pub status: ProcessStatus,
-    pub last_activity: u64,          // timestamp
+    pub last_activity: u64, // timestamp
 }
 
 /// Performance metrics for a provider
@@ -243,13 +242,13 @@ pub struct SystemMetrics {
     pub tokens_per_minute: f64,
     pub unique_per_dollar: f64,
     pub unique_per_1k_tokens: f64,
-    
+
     /// Breakdown by producer
     pub by_producer: HashMap<String, ProducerMetrics>,
-    
+
     /// Breakdown by provider
     pub by_provider: HashMap<ProviderId, ProviderMetrics>,
-    
+
     /// System state
     pub active_producers: u32,
     pub current_topic: Option<String>,

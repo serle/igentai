@@ -1,11 +1,11 @@
 //! Producer data structures and configuration types
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use shared::{OptimizationMode, ProviderId};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
-use shared::{ProviderId, OptimizationMode};
 
 /// Producer configuration
 #[derive(Debug, Clone)]
@@ -183,7 +183,7 @@ mod tests {
     fn test_producer_config_creation() {
         let addr: SocketAddr = "127.0.0.1:6001".parse().unwrap();
         let config = ProducerConfig::new(addr, "test topic".to_string());
-        
+
         assert_eq!(config.orchestrator_addr, addr);
         assert_eq!(config.topic, "test topic");
         assert_eq!(config.max_concurrent_requests, 10);
@@ -208,15 +208,15 @@ mod tests {
     fn test_producer_state_lifecycle() {
         let config = ProducerConfig::new("127.0.0.1:6001".parse().unwrap(), "test".to_string());
         let mut state = ProducerState::new(config);
-        
+
         assert!(!state.is_running);
         assert!(!state.should_stop);
-        
+
         state.start();
         assert!(state.is_running);
         assert!(!state.should_stop);
         assert!(state.start_time.is_some());
-        
+
         state.stop();
         assert!(!state.is_running);
         assert!(state.should_stop);
@@ -227,10 +227,10 @@ mod tests {
 // Producer Execution Types
 // ============================================================================
 
+use crate::core::generator::CommandGenerator;
+use shared::ProducerCommand;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use shared::ProducerCommand;
-use crate::core::generator::CommandGenerator;
 
 /// Unified configuration that handles both test and production modes
 #[derive(Debug, Clone)]
@@ -244,12 +244,8 @@ pub struct ExecutionConfig {
 
 #[derive(Debug, Clone)]
 pub enum ExecutionMode {
-    Standalone { 
-        max_iterations: Option<u32>,
-    },
-    Production {
-        orchestrator_endpoint: String,
-    },
+    Standalone { max_iterations: Option<u32> },
+    Production { orchestrator_endpoint: String },
 }
 
 /// Unified command source that abstracts test vs production command flows
@@ -261,17 +257,18 @@ pub enum CommandSource {
     Simulator(CommandGenerator),
 }
 
-use crate::error::{ProducerResult, ProducerError};
+use crate::error::{ProducerError, ProducerResult};
 
 impl ExecutionConfig {
     /// Parse command line arguments and environment to create unified config
     pub fn from_args_and_env(
-        orchestrator_endpoint: Option<String>, 
+        orchestrator_endpoint: Option<String>,
         topic: String,
         request_interval_secs: Option<u64>,
         max_requests: Option<u32>,
     ) -> ProducerResult<Self> {
-        let orchestrator_addr = orchestrator_endpoint.as_ref()
+        let orchestrator_addr = orchestrator_endpoint
+            .as_ref()
             .map(|ep| ep.parse().map_err(|_| ProducerError::config("Invalid endpoint")))
             .transpose()?
             .unwrap_or_else(|| "127.0.0.1:6001".parse().unwrap());
@@ -279,10 +276,12 @@ impl ExecutionConfig {
         let producer_config = ProducerConfig::new(orchestrator_addr, topic);
 
         let mode = match orchestrator_endpoint {
-            Some(endpoint) => ExecutionMode::Production { orchestrator_endpoint: endpoint },
-            None => {
-                ExecutionMode::Standalone { max_iterations: max_requests }
-            }
+            Some(endpoint) => ExecutionMode::Production {
+                orchestrator_endpoint: endpoint,
+            },
+            None => ExecutionMode::Standalone {
+                max_iterations: max_requests,
+            },
         };
 
         Ok(ExecutionConfig {
@@ -297,21 +296,19 @@ impl ExecutionConfig {
     /// Detect all available providers based on API keys
     pub fn detect_available_providers(config: &ProducerConfig) -> Vec<ProviderId> {
         let mut providers: Vec<ProviderId> = config.api_keys.keys().copied().collect();
-        
+
         // Always include Random provider as fallback if not already present
         if !providers.contains(&ProviderId::Random) {
             providers.push(ProviderId::Random);
         }
-        
+
         // Prefer Random provider for testing by putting it first
-        providers.sort_by(|a, b| {
-            match (a, b) {
-                (ProviderId::Random, _) => std::cmp::Ordering::Less,
-                (_, ProviderId::Random) => std::cmp::Ordering::Greater,
-                _ => a.to_string().cmp(&b.to_string()),
-            }
+        providers.sort_by(|a, b| match (a, b) {
+            (ProviderId::Random, _) => std::cmp::Ordering::Less,
+            (_, ProviderId::Random) => std::cmp::Ordering::Greater,
+            _ => a.to_string().cmp(&b.to_string()),
         });
-        
+
         providers
     }
 }
@@ -328,24 +325,22 @@ mod execution_config_tests {
             "test topic".to_string(),
             Some(5),
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         match config.mode {
-            ExecutionMode::Production { .. } => {},
+            ExecutionMode::Production { .. } => {}
             _ => panic!("Expected production mode"),
         }
 
-        // Test test mode
-        let config = ExecutionConfig::from_args_and_env(
-            None,
-            "test topic".to_string(),
-            Some(2),
-            Some(100),
-        ).unwrap();
+        // Test standalone mode
+        let config = ExecutionConfig::from_args_and_env(None, "test topic".to_string(), Some(2), Some(100)).unwrap();
 
         match config.mode {
-            ExecutionMode::Test { max_iterations: Some(100) } => {},
-            _ => panic!("Expected test mode with max_iterations"),
+            ExecutionMode::Standalone {
+                max_iterations: Some(100),
+            } => {}
+            _ => panic!("Expected standalone mode with max_iterations"),
         }
     }
 
@@ -354,7 +349,7 @@ mod execution_config_tests {
         let mut api_keys = HashMap::new();
         api_keys.insert(ProviderId::OpenAI, "test_key".to_string());
         api_keys.insert(ProviderId::Anthropic, "test_key".to_string());
-        
+
         let config = ProducerConfig {
             orchestrator_addr: "127.0.0.1:6001".parse().unwrap(),
             topic: "test".to_string(),
@@ -368,7 +363,7 @@ mod execution_config_tests {
         };
 
         let providers = ExecutionConfig::detect_available_providers(&config);
-        
+
         // Should include Random first (preferred for testing)
         assert_eq!(providers[0], ProviderId::Random);
         // Should include the configured providers

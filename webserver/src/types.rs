@@ -1,12 +1,12 @@
 //! WebServer-specific types and messages
 
-use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use uuid::Uuid;
 
-use shared::{SystemMetrics, ProcessId, ProviderMetadata, OrchestratorUpdate};
 use shared::messages::webserver::CompletionReason;
+use shared::{OrchestratorUpdate, ProcessId, ProviderMetadata, SystemMetrics};
 
 /// WebServer configuration
 #[derive(Debug, Clone)]
@@ -90,11 +90,8 @@ pub enum ClientMessage {
 
     /// Connection acknowledgment
     #[serde(rename = "connection_ack")]
-    ConnectionAck {
-        session_id: Uuid,
-        server_time: u64,
-    },
-    
+    ConnectionAck { session_id: Uuid, server_time: u64 },
+
     /// Real-time statistics update
     #[serde(rename = "statistics_update")]
     StatisticsUpdate {
@@ -104,7 +101,7 @@ pub enum ClientMessage {
         total_unique_attributes: usize,
         metrics: SystemMetrics,
     },
-    
+
     /// Generation completed notification
     #[serde(rename = "generation_complete")]
     GenerationComplete {
@@ -280,11 +277,17 @@ pub fn convert_orchestrator_update(update: OrchestratorUpdate) -> Vec<ClientMess
                 attributes: attrs,
                 producer_id: ProcessId::current().clone(), // Would need actual producer ID from update
                 metadata: create_default_provider_metadata(), // Helper function
-                uniqueness_ratio: 1.0, // Would be calculated
+                uniqueness_ratio: 1.0,                     // Would be calculated
             }]
-        },
-        
-        OrchestratorUpdate::StatisticsUpdate { timestamp, active_producers, current_topic, total_unique_attributes, metrics } => {
+        }
+
+        OrchestratorUpdate::StatisticsUpdate {
+            timestamp,
+            active_producers,
+            current_topic,
+            total_unique_attributes,
+            metrics,
+        } => {
             vec![ClientMessage::StatisticsUpdate {
                 timestamp,
                 active_producers,
@@ -292,9 +295,15 @@ pub fn convert_orchestrator_update(update: OrchestratorUpdate) -> Vec<ClientMess
                 total_unique_attributes,
                 metrics,
             }]
-        },
-        
-        OrchestratorUpdate::GenerationComplete { timestamp, topic, total_iterations, final_unique_count, completion_reason } => {
+        }
+
+        OrchestratorUpdate::GenerationComplete {
+            timestamp,
+            topic,
+            total_iterations,
+            final_unique_count,
+            completion_reason,
+        } => {
             vec![ClientMessage::GenerationComplete {
                 timestamp,
                 topic,
@@ -302,8 +311,8 @@ pub fn convert_orchestrator_update(update: OrchestratorUpdate) -> Vec<ClientMess
                 final_unique_count,
                 completion_reason,
             }]
-        },
-        
+        }
+
         OrchestratorUpdate::ErrorNotification(error_msg) => {
             vec![ClientMessage::Alert {
                 level: AlertLevel::Error,
@@ -312,8 +321,8 @@ pub fn convert_orchestrator_update(update: OrchestratorUpdate) -> Vec<ClientMess
                 timestamp: Utc::now().timestamp() as u64,
                 dismissible: true,
             }]
-        },
-        
+        }
+
         _ => vec![], // Handle other update types as needed
     }
 }

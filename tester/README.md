@@ -44,7 +44,7 @@ let config = OrchestratorConfig::builder()
     .topic("test_topic")
     .producers(3)
     .iterations(Some(5))
-    .provider("test") 
+    .provider("random") 
     .build();
 
 // CLI Mode with custom producer address
@@ -203,7 +203,7 @@ curl -X POST http://127.0.0.1:8080/topics \
     "topic": "manual_test",
     "producers": 2,
     "iterations": 3,
-    "provider": "test"
+    "provider": "random"
   }'
 ```
 

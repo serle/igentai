@@ -1,19 +1,15 @@
 //! Service traits for dependency injection
-//! 
+//!
 //! This module defines all I/O service traits used by the orchestrator.
 //! Each trait is mockable for comprehensive testing.
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use shared::{
-    ProcessId, ProviderId,
-    WebServerRequest, OrchestratorUpdate,
-    OrchestratorCommand, ProducerUpdate,
-};
 use crate::error::OrchestratorResult;
+use shared::{OrchestratorCommand, OrchestratorUpdate, ProcessId, ProducerUpdate, ProviderId, WebServerRequest};
 
 /// API key management service
 #[mockall::automock]
@@ -21,10 +17,10 @@ use crate::error::OrchestratorResult;
 pub trait ApiKeySource: Send + Sync {
     /// Get all available API keys
     async fn get_api_keys(&self) -> OrchestratorResult<HashMap<ProviderId, String>>;
-    
+
     /// Check if a specific provider has an API key
     async fn has_api_key(&self, provider_id: ProviderId) -> bool;
-    
+
     /// Get API key for a specific provider
     async fn get_provider_key(&self, provider_id: ProviderId) -> OrchestratorResult<Option<String>>;
 }
@@ -34,29 +30,39 @@ pub trait ApiKeySource: Send + Sync {
 #[async_trait]
 pub trait Communicator: Send + Sync {
     /// Start listening for WebServer requests
-    async fn start_webserver_listener(&self, bind_addr: SocketAddr) -> OrchestratorResult<mpsc::Receiver<WebServerRequest>>;
-    
+    async fn start_webserver_listener(
+        &self,
+        bind_addr: SocketAddr,
+    ) -> OrchestratorResult<mpsc::Receiver<WebServerRequest>>;
+
     /// Send update to WebServer
     async fn send_webserver_update(&self, update: OrchestratorUpdate) -> OrchestratorResult<()>;
-    
+
     /// Start listening for Producer updates
-    async fn start_producer_listener(&self, bind_addr: SocketAddr) -> OrchestratorResult<mpsc::Receiver<ProducerUpdate>>;
-    
+    async fn start_producer_listener(
+        &self,
+        bind_addr: SocketAddr,
+    ) -> OrchestratorResult<mpsc::Receiver<ProducerUpdate>>;
+
     /// Send command to a specific Producer
-    async fn send_producer_command(&self, producer_id: ProcessId, command: OrchestratorCommand) -> OrchestratorResult<()>;
-    
+    async fn send_producer_command(
+        &self,
+        producer_id: ProcessId,
+        command: OrchestratorCommand,
+    ) -> OrchestratorResult<()>;
+
     /// Register producer address for command sending
     async fn register_producer(&self, producer_id: ProcessId, address: SocketAddr) -> OrchestratorResult<()>;
-    
+
     /// Mark producer as ready to receive commands
     async fn mark_producer_ready(&self, producer_id: ProcessId, address: SocketAddr) -> OrchestratorResult<()>;
-    
+
     /// Register webserver address for update sending
     async fn register_webserver(&self, address: SocketAddr) -> OrchestratorResult<()>;
-    
+
     /// Mark webserver as ready to receive updates
     async fn mark_webserver_ready(&self, address: SocketAddr) -> OrchestratorResult<()>;
-    
+
     /// Close all communication channels
     async fn shutdown(&self) -> OrchestratorResult<()>;
 }
@@ -67,25 +73,30 @@ pub trait Communicator: Send + Sync {
 pub trait FileSystem: Send + Sync {
     /// Create a topic directory structure
     async fn create_topic_directory(&self, topic: &str) -> OrchestratorResult<()>;
-    
+
     /// Write unique attributes to storage
     async fn write_unique_attributes(&self, topic: &str, attributes: &[String]) -> OrchestratorResult<()>;
-    
+
     /// Write unique attributes with provider metadata to storage
-    async fn write_unique_attributes_with_metadata(&self, topic: &str, attributes: &[String], provider_metadata: &shared::types::ProviderMetadata) -> OrchestratorResult<()>;
-    
+    async fn write_unique_attributes_with_metadata(
+        &self,
+        topic: &str,
+        attributes: &[String],
+        provider_metadata: &shared::types::ProviderMetadata,
+    ) -> OrchestratorResult<()>;
+
     /// Read existing attributes for a topic
     async fn read_topic_attributes(&self, topic: &str) -> OrchestratorResult<Vec<String>>;
-    
+
     /// Clean up old topic data
     async fn cleanup_topic(&self, topic: &str) -> OrchestratorResult<()>;
-    
+
     /// Ensure all writes are synced to disk
     async fn sync_to_disk(&self) -> OrchestratorResult<()>;
-    
+
     /// Append new unique attributes to output.txt file (one per line)
     async fn append_to_output(&self, topic: &str, new_attributes: &[String]) -> OrchestratorResult<()>;
-    
+
     /// Write arbitrary file content (for JSON exports)
     async fn write_file(&self, filename: &str, content: &[u8]) -> OrchestratorResult<()>;
 }
@@ -102,19 +113,19 @@ pub trait ProcessManager: Send + Sync {
         api_keys: HashMap<ProviderId, String>,
         orchestrator_addr: SocketAddr,
     ) -> OrchestratorResult<Vec<ProducerInfo>>;
-    
+
     /// Spawn webserver process
     async fn spawn_webserver(&self, port: u16, orchestrator_addr: SocketAddr) -> OrchestratorResult<WebServerInfo>;
-    
+
     /// Check health of all managed processes
     async fn check_process_health(&self) -> OrchestratorResult<Vec<ProcessHealthInfo>>;
-    
+
     /// Stop a specific producer
     async fn stop_producer(&self, producer_id: ProcessId) -> OrchestratorResult<()>;
-    
+
     /// Stop webserver
     async fn stop_webserver(&self) -> OrchestratorResult<()>;
-    
+
     /// Stop all managed processes
     async fn stop_all(&self) -> OrchestratorResult<()>;
 }

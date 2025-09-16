@@ -1,25 +1,25 @@
 //! Builder Extensions for Fault Tolerance Testing
-//! 
+//!
 //! Extends the existing OrchestratorConfigBuilder with fault tolerance capabilities
 
-use std::time::Duration;
+use crate::config::fault_tolerance::{FaultScenario, FaultToleranceConfig};
 use crate::config::{OrchestratorConfig, OrchestratorConfigBuilder};
-use crate::config::fault_tolerance::{FaultToleranceConfig, FaultScenario};
+use std::time::Duration;
 
 /// Extension trait for adding fault tolerance configuration to the builder
 pub trait FaultToleranceConfigBuilder {
     /// Add fault tolerance testing configuration
     fn fault_tolerance(self, config: FaultToleranceConfig) -> Self;
-    
+
     /// Kill producers after specified iteration: kill_after(iteration, num_producers, heal_within_seconds)
     fn kill_after(self, iteration: u32, num_producers: u32, heal_within_seconds: u64) -> Self;
-    
+
     /// Kill orchestrator after specified iteration
     fn kill_orchestrator_after(self, iteration: u32) -> Self;
-    
+
     /// Kill all producers after specified iteration
     fn kill_all_after(self, iteration: u32, heal_within_seconds: u64) -> Self;
-    
+
     /// Comprehensive multi-fault test over specified iterations
     fn with_multi_fault_test(self, total_iterations: u32) -> Self;
 }
@@ -29,52 +29,46 @@ impl FaultToleranceConfigBuilder for OrchestratorConfigBuilder {
         self.fault_tolerance_config = Some(config);
         self
     }
-    
+
     fn kill_after(self, iteration: u32, num_producers: u32, heal_within_seconds: u64) -> Self {
         let config = FaultToleranceConfig {
-            scenarios: vec![
-                FaultScenario::KillProducers {
-                    after_iteration: iteration,
-                    num_producers,
-                    heal_within_seconds,
-                }
-            ],
+            scenarios: vec![FaultScenario::KillProducers {
+                after_iteration: iteration,
+                num_producers,
+                heal_within_seconds,
+            }],
             test_iterations: iteration + 10, // Run for 10 more iterations after fault
             verbose_fault_logging: true,
         };
-        
+
         self.fault_tolerance(config)
     }
-    
+
     fn kill_orchestrator_after(self, iteration: u32) -> Self {
         let config = FaultToleranceConfig {
-            scenarios: vec![
-                FaultScenario::KillOrchestrator {
-                    after_iteration: iteration,
-                }
-            ],
+            scenarios: vec![FaultScenario::KillOrchestrator {
+                after_iteration: iteration,
+            }],
             test_iterations: iteration + 5, // Short test since producers should terminate
             verbose_fault_logging: true,
         };
-        
+
         self.fault_tolerance(config)
     }
-    
+
     fn kill_all_after(self, iteration: u32, heal_within_seconds: u64) -> Self {
         let config = FaultToleranceConfig {
-            scenarios: vec![
-                FaultScenario::KillAllProducers {
-                    after_iteration: iteration,
-                    heal_within_seconds,
-                }
-            ],
+            scenarios: vec![FaultScenario::KillAllProducers {
+                after_iteration: iteration,
+                heal_within_seconds,
+            }],
             test_iterations: iteration + 15, // Run longer to test full recovery
             verbose_fault_logging: true,
         };
-        
+
         self.fault_tolerance(config)
     }
-    
+
     fn with_multi_fault_test(self, total_iterations: u32) -> Self {
         let config = FaultToleranceConfig {
             scenarios: vec![
@@ -99,7 +93,7 @@ impl FaultToleranceConfigBuilder for OrchestratorConfigBuilder {
             test_iterations: total_iterations,
             verbose_fault_logging: true,
         };
-        
+
         self.fault_tolerance(config)
     }
 }

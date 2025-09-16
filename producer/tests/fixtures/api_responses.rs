@@ -3,9 +3,9 @@
 #![allow(dead_code)] // Test utilities may not all be used currently
 
 use chrono::Utc;
-use uuid::Uuid;
+use producer::{ApiRequest, ApiResponse};
 use shared::ProviderId;
-use producer::{ApiResponse, ApiRequest};
+use uuid::Uuid;
 
 /// Create a successful API response for testing
 pub fn create_success_response(provider: ProviderId, content: String, tokens: u32) -> ApiResponse {
@@ -53,7 +53,8 @@ pub fn sample_content_with_attributes() -> String {
      Our office is located at 123 Business Ave, Suite 100, Tech City, CA 90210. \
      For technical support, email support@acme.com or visit https://acme.com/support. \
      Emergency contact: (555) 987-6543. \
-     Company registration: ACME Industries LLC, founded in 2020-01-15.".to_string()
+     Company registration: ACME Industries LLC, founded in 2020-01-15."
+        .to_string()
 }
 
 /// Sample content with email addresses
@@ -142,40 +143,17 @@ pub fn gemini_response_json() -> serde_json::Value {
 /// Create responses for all providers
 pub fn create_provider_responses() -> Vec<ApiResponse> {
     vec![
-        create_success_response(
-            ProviderId::OpenAI,
-            sample_content_emails(),
-            100
-        ),
-        create_success_response(
-            ProviderId::Anthropic,
-            sample_content_phones(),
-            120
-        ),
-        create_success_response(
-            ProviderId::Gemini,
-            sample_content_urls(),
-            80
-        ),
+        create_success_response(ProviderId::OpenAI, sample_content_emails(), 100),
+        create_success_response(ProviderId::Anthropic, sample_content_phones(), 120),
+        create_success_response(ProviderId::Gemini, sample_content_urls(), 80),
     ]
 }
 
 /// Create mixed success/error responses
 pub fn create_mixed_responses() -> Vec<ApiResponse> {
     vec![
-        create_success_response(
-            ProviderId::OpenAI,
-            sample_content_with_attributes(),
-            150
-        ),
-        create_error_response(
-            ProviderId::Anthropic,
-            "Rate limit exceeded".to_string()
-        ),
-        create_success_response(
-            ProviderId::Gemini,
-            sample_content_no_attributes(),
-            50
-        ),
+        create_success_response(ProviderId::OpenAI, sample_content_with_attributes(), 150),
+        create_error_response(ProviderId::Anthropic, "Rate limit exceeded".to_string()),
+        create_success_response(ProviderId::Gemini, sample_content_no_attributes(), 50),
     ]
 }

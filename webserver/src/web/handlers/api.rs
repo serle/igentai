@@ -1,27 +1,21 @@
 //! REST API handlers
-//! 
+//!
 //! HTTP API endpoints for dashboard and control operations
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-};
-use serde_json::{json, Value};
+use axum::{extract::State, http::StatusCode, response::Json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::sync::Arc;
-use serde::{Serialize, Deserialize};
 
-use crate::traits::{WebSocketManager, OrchestratorClient};
+use crate::traits::{OrchestratorClient, WebSocketManager};
 
 /// Get dashboard data
-pub async fn get_dashboard<W>(
-    State(websocket_manager): State<Arc<W>>,
-) -> Result<Json<Value>, StatusCode>
+pub async fn get_dashboard<W>(State(websocket_manager): State<Arc<W>>) -> Result<Json<Value>, StatusCode>
 where
     W: WebSocketManager,
 {
     let client_count = websocket_manager.client_count().await;
-    
+
     let response = json!({
         "status": "ok",
         "data": {
@@ -33,19 +27,17 @@ where
             }
         }
     });
-    
+
     Ok(Json(response))
 }
 
 /// Get system status
-pub async fn get_status<W>(
-    State(websocket_manager): State<Arc<W>>,
-) -> Result<Json<Value>, StatusCode>
+pub async fn get_status<W>(State(websocket_manager): State<Arc<W>>) -> Result<Json<Value>, StatusCode>
 where
     W: WebSocketManager,
 {
     let client_count = websocket_manager.client_count().await;
-    
+
     let response = json!({
         "status": "ok",
         "data": {
@@ -56,7 +48,7 @@ where
             "version": env!("CARGO_PKG_VERSION")
         }
     });
-    
+
     Ok(Json(response))
 }
 
@@ -75,15 +67,15 @@ pub async fn start_generation<O>(
 where
     O: OrchestratorClient + Send + Sync + 'static,
 {
-    use shared::{WebServerRequest, OptimizationMode, GenerationConstraints};
-    
+    use shared::{GenerationConstraints, OptimizationMode, WebServerRequest};
+
     let optimization_mode = OptimizationMode::MaximizeEfficiency;
     let constraints = GenerationConstraints {
         max_cost_per_minute: 1.0,
         target_uam: 10.0,
         max_runtime_seconds: None,
     };
-    
+
     let webserver_request = WebServerRequest::StartGeneration {
         request_id: 1,
         topic: request.topic.clone(),
@@ -92,7 +84,7 @@ where
         constraints,
         iterations: request.iterations,
     };
-    
+
     let client = orchestrator_client.lock().await;
     match client.send_request(webserver_request).await {
         Ok(_) => {
@@ -102,9 +94,7 @@ where
             });
             Ok(Json(response))
         }
-        Err(_) => {
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -116,11 +106,9 @@ where
     O: OrchestratorClient + Send + Sync + 'static,
 {
     use shared::WebServerRequest;
-    
-    let webserver_request = WebServerRequest::StopGeneration {
-        request_id: 2,
-    };
-    
+
+    let webserver_request = WebServerRequest::StopGeneration { request_id: 2 };
+
     let client = orchestrator_client.lock().await;
     match client.send_request(webserver_request).await {
         Ok(_) => {
@@ -130,8 +118,6 @@ where
             });
             Ok(Json(response))
         }
-        Err(_) => {
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }

@@ -1,7 +1,7 @@
 //! WebServer ↔ Orchestrator communication messages
 
-use serde::{Serialize, Deserialize};
-use crate::types::{SystemMetrics, OptimizationMode, GenerationConstraints};
+use crate::types::{GenerationConstraints, OptimizationMode, SystemMetrics};
+use serde::{Deserialize, Serialize};
 
 /// Legacy alias for compatibility
 pub type TaskRequest = WebServerRequest;
@@ -20,29 +20,22 @@ pub enum WebServerRequest {
         constraints: GenerationConstraints,
         iterations: Option<u32>,
     },
-    
+
     /// Stop current generation
-    StopGeneration {
-        request_id: u64,
-    },
-    
+    StopGeneration { request_id: u64 },
+
     /// Request current system status
-    GetStatus {
-        request_id: u64,
-    },
-    
+    GetStatus { request_id: u64 },
+
     /// Update system configuration
     UpdateConfig {
         request_id: u64,
         optimization_mode: Option<OptimizationMode>,
         constraints: Option<GenerationConstraints>,
     },
-    
+
     /// WebServer ready signal - sent when IPC listener is initialized
-    Ready {
-        listen_port: u16,
-        http_port: u16,
-    },
+    Ready { listen_port: u16, http_port: u16 },
 }
 
 /// Messages sent from Orchestrator to WebServer
@@ -54,13 +47,13 @@ pub enum OrchestratorUpdate {
         success: bool,
         message: Option<String>,
     },
-    
+
     /// New attributes notification
     NewAttributes(Vec<String>),
-    
+
     /// Error notification
     ErrorNotification(String),
-    
+
     /// Real-time statistics update
     StatisticsUpdate {
         timestamp: u64,
@@ -69,7 +62,7 @@ pub enum OrchestratorUpdate {
         total_unique_attributes: usize,
         metrics: SystemMetrics,
     },
-    
+
     /// Generation completed notification
     GenerationComplete {
         timestamp: u64,
