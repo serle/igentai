@@ -3127,13 +3127,17 @@ const RANDOM_WORDS: &[&str] = &[
 pub struct RealApiClient {
     client: Client,
     api_keys: HashMap<ProviderId, String>,
+    api_models: HashMap<ProviderId, String>,
     #[allow(dead_code)]
     request_timeout_ms: u64,
 }
 
 impl RealApiClient {
-    /// Create new API client
+    /// Create new API client with explicit keys and models
     pub fn new(api_keys: HashMap<ProviderId, String>, request_timeout_ms: u64) -> Self {
+        // Load models from environment variables, with fallbacks
+        let api_models = Self::load_models_from_env();
+        
         let client = Client::builder()
             .timeout(std::time::Duration::from_millis(request_timeout_ms))
             .build()
@@ -3142,17 +3146,105 @@ impl RealApiClient {
         Self {
             client,
             api_keys,
+            api_models,
             request_timeout_ms,
         }
     }
 
+    /// Create new API client with both keys and models from environment
+    pub fn new_from_env(request_timeout_ms: u64) -> Self {
+        let api_keys = Self::load_keys_from_env();
+        let api_models = Self::load_models_from_env();
+        
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_millis(request_timeout_ms))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        Self {
+            client,
+            api_keys,
+            api_models,
+            request_timeout_ms,
+        }
+    }
+
+    /// Load API keys from environment variables
+    fn load_keys_from_env() -> HashMap<ProviderId, String> {
+        use std::env;
+        
+        let mut keys = HashMap::new();
+        
+        // Load OpenAI key
+        if let Ok(key) = env::var("OPENAI_API_KEY") {
+            keys.insert(ProviderId::OpenAI, key.trim().to_string());
+        }
+        
+        // Load Anthropic key
+        if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
+            keys.insert(ProviderId::Anthropic, key.trim().to_string());
+        }
+        
+        // Load Gemini key
+        if let Ok(key) = env::var("GEMINI_API_KEY") {
+            keys.insert(ProviderId::Gemini, key.trim().to_string());
+        }
+        
+        // Load Random provider key
+        if let Ok(key) = env::var("RANDOM_API_KEY") {
+            keys.insert(ProviderId::Random, key.trim().to_string());
+        }
+        
+        keys
+    }
+
+    /// Load API models from environment variables
+    fn load_models_from_env() -> HashMap<ProviderId, String> {
+        use std::env;
+        
+        let mut models = HashMap::new();
+        
+        // Load models with fallbacks to defaults
+        let openai_model = env::var("OPENAI_API_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+        models.insert(ProviderId::OpenAI, openai_model.trim().to_string());
+        
+        let anthropic_model = env::var("ANTHROPIC_API_MODEL").unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string());
+        models.insert(ProviderId::Anthropic, anthropic_model.trim().to_string());
+        
+        let gemini_model = env::var("GEMINI_API_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+        models.insert(ProviderId::Gemini, gemini_model.trim().to_string());
+        
+        let random_model = env::var("RANDOM_API_MODEL").unwrap_or_else(|_| "random".to_string());
+        models.insert(ProviderId::Random, random_model.trim().to_string());
+        
+        models
+    }
+
+    /// Get the model name for a provider
+    fn get_model(&self, provider: ProviderId) -> &str {
+        self.api_models.get(&provider)
+            .map(|s| s.as_str())
+            .unwrap_or_else(|| {
+                // Fallback to hardcoded defaults
+                match provider {
+                    ProviderId::OpenAI => "gpt-4o-mini",
+                    ProviderId::Anthropic => "claude-3-5-sonnet-20241022", 
+                    ProviderId::Gemini => "gemini-2.5-flash",
+                    ProviderId::Random => "random",
+                }
+            })
+    }
+
     /// Get API endpoint URL for provider
-    fn get_endpoint_url(&self, provider: ProviderId) -> &'static str {
+    fn get_endpoint_url(&self, provider: ProviderId) -> String {
         match provider {
-            ProviderId::OpenAI => "https://api.openai.com/v1/chat/completions",
-            ProviderId::Anthropic => "https://api.anthropic.com/v1/messages",
-            ProviderId::Gemini => "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
-            ProviderId::Random => "local://random", // Not used for HTTP requests
+            ProviderId::OpenAI => "https://api.openai.com/v1/chat/completions".to_string(),
+            ProviderId::Anthropic => "https://api.anthropic.com/v1/messages".to_string(),
+            ProviderId::Gemini => {
+                let model = self.get_model(provider);
+                format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", model)
+            },
+            ProviderId::Random => "local://random".to_string(), // Not used for HTTP requests
         }
     }
 
@@ -3190,7 +3282,7 @@ impl RealApiClient {
                                 .parse()
                                 .map_err(|_| ProducerError::config("Invalid Anthropic API key format"))?,
                         );
-                        headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
+                        headers.insert("anthropic-version", "2023-06-01".parse().unwrap());  // Latest stable API version
                     }
                     ProviderId::Gemini => {
                         // Gemini uses API key as URL parameter
@@ -3207,22 +3299,25 @@ impl RealApiClient {
     fn build_request_body(&self, provider: ProviderId, request: &ApiRequest) -> Value {
         match provider {
             ProviderId::OpenAI => json!({
-                "model": "gpt-4o-mini",
+                "model": self.get_model(provider),  // Load from environment
                 "messages": [{
                     "role": "user",
                     "content": request.prompt
                 }],
                 "max_tokens": request.max_tokens,
-                "temperature": request.temperature
+                "temperature": request.temperature,
+                "n": 1,
+                "stream": false
             }),
             ProviderId::Anthropic => json!({
-                "model": "claude-3-sonnet-20240229",
+                "model": self.get_model(provider),  // Load from environment
                 "max_tokens": request.max_tokens,
                 "temperature": request.temperature,
                 "messages": [{
                     "role": "user",
                     "content": request.prompt
-                }]
+                }],
+                "stream": false
             }),
             ProviderId::Gemini => json!({
                 "contents": [{
@@ -3352,7 +3447,7 @@ impl ApiClient for RealApiClient {
         }
 
         // Build request for real API providers
-        let url = self.get_endpoint_url(request.provider).to_string();
+        let url = self.get_endpoint_url(request.provider);
         let headers = self.build_headers(request.provider)?;
         let body = self.build_request_body(request.provider, &request);
 
@@ -3470,25 +3565,17 @@ impl ApiClient for RealApiClient {
     }
 
     async fn health_check(&self, provider: ProviderId) -> ProducerResult<bool> {
-        match provider {
-            ProviderId::Random => {
-                // Random provider is always healthy - no API key needed
-                Ok(true)
-            }
-            _ => {
-                // Simple health check - verify we have API key
-                Ok(self.api_keys.contains_key(&provider))
-            }
-        }
+        // Simple health check - verify we have API key for all providers (including Random for consistency)
+        Ok(self.api_keys.contains_key(&provider))
     }
 
     fn estimate_cost(&self, provider: ProviderId, tokens: u32) -> f64 {
-        // Updated cost estimates (per 1K tokens) based on typical 2024-2025 pricing
+        // Updated cost estimates (per 1K tokens) based on 2025 pricing
         let cost_per_1k = match provider {
-            ProviderId::OpenAI => 0.0015,   // GPT-4o-mini updated pricing
-            ProviderId::Anthropic => 0.003, // Claude-3-Sonnet updated pricing
-            ProviderId::Gemini => 0.0005,   // Gemini Pro updated pricing
-            ProviderId::Random => 0.0001,   // Random provider minimal cost for testing cost calculations
+            ProviderId::OpenAI => 0.00015,  // GPT-4o-2024-08-06 input tokens: $0.15/1M tokens
+            ProviderId::Anthropic => 0.003, // Claude-3.5 Sonnet input tokens: $3/1M tokens  
+            ProviderId::Gemini => 0.000075, // Gemini 2.5 Flash input tokens: $0.075/1M tokens
+            ProviderId::Random => 0.0001,   // Random provider minimal cost for testing
         };
 
         (tokens as f64 / 1000.0) * cost_per_1k
@@ -3506,6 +3593,7 @@ mod tests {
         keys.insert(ProviderId::OpenAI, "test-openai-key".to_string());
         keys.insert(ProviderId::Anthropic, "test-anthropic-key".to_string());
         keys.insert(ProviderId::Gemini, "test-gemini-key".to_string());
+        keys.insert(ProviderId::Random, "random".to_string());
         keys
     }
 
@@ -3543,7 +3631,7 @@ mod tests {
         );
         assert_eq!(
             client.get_endpoint_url(ProviderId::Gemini),
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
         );
     }
 
@@ -3551,12 +3639,12 @@ mod tests {
     fn test_cost_estimation() {
         let client = RealApiClient::new(create_test_api_keys(), 30000);
 
-        assert_eq!(client.estimate_cost(ProviderId::OpenAI, 1000), 0.0015);
+        assert_eq!(client.estimate_cost(ProviderId::OpenAI, 1000), 0.00015);
         assert_eq!(client.estimate_cost(ProviderId::Anthropic, 1000), 0.003);
-        assert_eq!(client.estimate_cost(ProviderId::Gemini, 1000), 0.0005);
+        assert_eq!(client.estimate_cost(ProviderId::Gemini, 1000), 0.000075);
 
         // Test fractional tokens
-        assert_eq!(client.estimate_cost(ProviderId::OpenAI, 500), 0.00075);
+        assert_eq!(client.estimate_cost(ProviderId::OpenAI, 500), 0.000075);
     }
 
     #[tokio::test]
@@ -3566,6 +3654,7 @@ mod tests {
         assert!(client.health_check(ProviderId::OpenAI).await.unwrap());
         assert!(client.health_check(ProviderId::Anthropic).await.unwrap());
         assert!(client.health_check(ProviderId::Gemini).await.unwrap());
+        assert!(client.health_check(ProviderId::Random).await.unwrap());
     }
 
     #[tokio::test]
@@ -3575,6 +3664,7 @@ mod tests {
         assert!(!client.health_check(ProviderId::OpenAI).await.unwrap());
         assert!(!client.health_check(ProviderId::Anthropic).await.unwrap());
         assert!(!client.health_check(ProviderId::Gemini).await.unwrap());
+        assert!(!client.health_check(ProviderId::Random).await.unwrap());
     }
 
     #[test]

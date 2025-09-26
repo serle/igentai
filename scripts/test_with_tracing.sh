@@ -30,6 +30,19 @@ echo ""
 # Change to project root
 cd "$(dirname "$0")/.."
 
+# Clear any inherited environment variables that might conflict with .env
+unset ROUTING_STRATEGY ROUTING_PRIMARY_PROVIDER ROUTING_PROVIDERS ROUTING_WEIGHTS 2>/dev/null || true
+
+# Load environment variables from .env file if it exists
+if [ -f ".env" ]; then
+    echo "📋 Loading environment from .env file..."
+    set -a  # Export all variables
+    source .env
+    set +a  # Stop exporting
+else
+    echo "⚠️  Warning: .env file not found - using system environment variables only"
+fi
+
 # Create logs directory if it doesn't exist
 mkdir -p "$LOG_DIR"
 

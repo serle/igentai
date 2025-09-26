@@ -146,15 +146,17 @@ where
                 Ok(CommandSource::Orchestrator(command_receiver))
             }
             ExecutionMode::Standalone { max_iterations } => {
-                let available_providers = ExecutionConfig::detect_available_providers(&self.config.producer_config);
                 process_info!(
                     ProcessId::current(),
-                    "🔧 Initializing standalone mode with providers {:?}",
-                    available_providers
+                    "🔧 Initializing standalone mode with routing strategy {:?}",
+                    self.config.routing_strategy
                 );
 
-                let generator =
-                    CommandGenerator::new(available_providers, *max_iterations, self.config.request_interval);
+                let generator = CommandGenerator::new(
+                    *max_iterations, 
+                    self.config.request_interval,
+                    self.config.routing_strategy.clone()
+                );
 
                 Ok(CommandSource::Simulator(generator))
             }
@@ -213,6 +215,7 @@ where
                 let base_prompt = state.config.topic.clone();
                 drop(state);
 
+                process_debug!(ProcessId::current(), "🎯 Simulator mode - using topic as base_prompt: '{}'", base_prompt);
                 Ok(generator.next_command(&base_prompt))
             }
         }
@@ -229,6 +232,9 @@ where
                 generation_config,
                 ..
             } => {
+                process_debug!(ProcessId::current(), "🎯 Producer received Start command with prompt: '{}'", prompt);
+                process_debug!(ProcessId::current(), "🎯 Producer routing strategy: {:?}", routing_strategy);
+
                 let mut state = self.state.write().await;
                 if !state.is_running {
                     state.current_prompt = Some(prompt.clone());
@@ -384,6 +390,10 @@ where
                         state.generation_config.clone(),
                     )
                 };
+
+                if let Some(ref prompt_text) = prompt {
+                    process_debug!(ProcessId::current(), "🎯 Producer using base_prompt: '{}'", prompt_text);
+                }
 
                 if !is_running || prompt.is_none() {
                     continue;
@@ -707,6 +717,7 @@ where
         topic,
         Some(2), // 2 second intervals
         max_requests,
+        None, // Use default routing strategy
     )?;
 
     Ok(Producer::new(config, api_client, communicator))

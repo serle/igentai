@@ -34,6 +34,8 @@ pub struct OrchestratorConfig {
     pub log_level: String,
     pub max_duration: Duration,
     pub fault_tolerance: Option<FaultToleranceConfig>,
+    pub routing_strategy: Option<String>,
+    pub routing_provider: Option<String>,
 }
 
 impl Default for OrchestratorConfig {
@@ -52,6 +54,8 @@ impl Default for OrchestratorConfig {
             log_level: "debug".to_string(),        // Default to debug for testing
             max_duration: Duration::from_secs(60), // Default 1 minute timeout
             fault_tolerance: None,
+            routing_strategy: None,
+            routing_provider: None,
         }
     }
 }
@@ -100,6 +104,16 @@ impl OrchestratorConfig {
         if let Some(ref output) = self.output {
             args.push("--output".to_string());
             args.push(output.clone());
+        }
+
+        if let Some(ref strategy) = self.routing_strategy {
+            args.push("--routing-strategy".to_string());
+            args.push(strategy.clone());
+        }
+
+        if let Some(ref provider) = self.routing_provider {
+            args.push("--routing-provider".to_string());
+            args.push(provider.clone());
         }
 
         // Add mode-specific arguments

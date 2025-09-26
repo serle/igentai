@@ -112,6 +112,7 @@ pub trait ProcessManager: Send + Sync {
         topic: &str,
         api_keys: HashMap<ProviderId, String>,
         orchestrator_addr: SocketAddr,
+        routing_strategy: Option<shared::RoutingStrategy>,
     ) -> OrchestratorResult<Vec<ProducerInfo>>;
 
     /// Spawn webserver process

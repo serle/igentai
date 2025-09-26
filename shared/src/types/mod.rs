@@ -196,6 +196,106 @@ pub enum RoutingStrategy {
     Backoff { provider: ProviderId },
 }
 
+impl RoutingStrategy {
+    /// Load routing strategy from environment variables
+    /// 
+    /// Environment variables:
+    /// - ROUTING_STRATEGY: roundrobin|priority|weighted|backoff (default: fallback to backoff/random)
+    /// - ROUTING_PRIMARY_PROVIDER: Provider for backoff strategy (default: random)
+    /// - ROUTING_PROVIDERS: Comma-separated provider list for roundrobin/priority
+    /// - ROUTING_WEIGHTS: Provider weights for weighted strategy (format: "openai:0.5,anthropic:0.3")
+    pub fn from_env() -> Result<Self, String> {
+        use std::env;
+        
+        // If no routing strategy is set, fallback to backoff with random (test mode)
+        let strategy_type = match env::var("ROUTING_STRATEGY") {
+            Ok(strategy) => strategy.to_lowercase(),
+            Err(_) => return Ok(Self::Backoff { provider: ProviderId::Random }),
+        };
+        
+        match strategy_type.as_str() {
+            "backoff" => {
+                let provider_str = env::var("ROUTING_PRIMARY_PROVIDER")
+                    .unwrap_or_else(|_| "random".to_string());
+                let provider = provider_str.parse()
+                    .map_err(|e| format!("Invalid ROUTING_PRIMARY_PROVIDER '{}': {}", provider_str, e))?;
+                Ok(Self::Backoff { provider })
+            }
+            "roundrobin" => {
+                let providers = Self::parse_providers()?;
+                if providers.is_empty() {
+                    return Err("ROUTING_PROVIDERS must be specified for roundrobin strategy".to_string());
+                }
+                Ok(Self::RoundRobin { providers })
+            }
+            "priority" => {
+                let providers = Self::parse_providers()?;
+                if providers.is_empty() {
+                    return Err("ROUTING_PROVIDERS must be specified for priority strategy".to_string());
+                }
+                Ok(Self::PriorityOrder { providers })
+            }
+            "weighted" => {
+                let weights = Self::parse_weights()?;
+                if weights.is_empty() {
+                    return Err("ROUTING_WEIGHTS must be specified for weighted strategy".to_string());
+                }
+                Ok(Self::Weighted { weights })
+            }
+            _ => Err(format!("Unknown routing strategy '{}'. Valid options: backoff, roundrobin, priority, weighted", strategy_type)),
+        }
+    }
+    
+    /// Parse comma-separated provider list from ROUTING_PROVIDERS
+    fn parse_providers() -> Result<Vec<ProviderId>, String> {
+        use std::env;
+        
+        let providers_str = env::var("ROUTING_PROVIDERS")
+            .map_err(|_| "ROUTING_PROVIDERS environment variable not set".to_string())?;
+        
+        providers_str
+            .split(',')
+            .map(|s| s.trim().parse())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Invalid provider in ROUTING_PROVIDERS: {}", e))
+    }
+    
+    /// Parse provider weights from ROUTING_WEIGHTS (format: "provider1:weight1,provider2:weight2")
+    fn parse_weights() -> Result<HashMap<ProviderId, f32>, String> {
+        use std::env;
+        
+        let weights_str = env::var("ROUTING_WEIGHTS")
+            .map_err(|_| "ROUTING_WEIGHTS environment variable not set".to_string())?;
+        
+        let mut weights = HashMap::new();
+        for pair in weights_str.split(',') {
+            let parts: Vec<&str> = pair.split(':').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid weight format '{}'. Expected 'provider:weight'", pair));
+            }
+            
+            let provider: ProviderId = parts[0].trim().parse()
+                .map_err(|e| format!("Invalid provider '{}': {}", parts[0], e))?;
+            let weight: f32 = parts[1].trim().parse()
+                .map_err(|e| format!("Invalid weight '{}': {}", parts[1], e))?;
+            
+            if weight < 0.0 || weight > 1.0 {
+                return Err(format!("Weight {} must be between 0.0 and 1.0", weight));
+            }
+            
+            weights.insert(provider, weight);
+        }
+        
+        // Validate weights sum to approximately 1.0
+        let sum: f32 = weights.values().sum();
+        if (sum - 1.0).abs() > 0.01 {
+            return Err(format!("Weights sum to {:.3}, but should sum to 1.0", sum));
+        }
+        
+        Ok(weights)
+    }
+}
+
 /// Generation configuration for providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationConfig {

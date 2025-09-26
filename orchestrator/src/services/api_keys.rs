@@ -67,7 +67,14 @@ impl RealApiKeySource {
     /// Load .env file if present
     fn load_dotenv() {
         // Try to load .env file, but don't fail if it doesn't exist
-        let _ = dotenv::dotenv();
+        // First try current directory, then parent directory (like producer does)
+        if let Ok(_) = dotenv::dotenv() {
+            tracing::debug!("📄 Loaded .env file from current directory");
+        } else if let Ok(_) = dotenv::from_path("../.env") {
+            tracing::debug!("📄 Loaded .env file from parent directory");
+        } else {
+            tracing::debug!("📄 No .env file found - using environment variables");
+        }
     }
 
     /// Validate that we have at least one API key
@@ -78,8 +85,13 @@ impl RealApiKeySource {
             ));
         }
 
-        // Validate key format (basic check)
+        // Validate key format (basic check) - skip Random provider
         for (provider, key) in keys {
+            // Skip validation for Random provider since it's only used for testing
+            if *provider == ProviderId::Random {
+                continue;
+            }
+
             if key.len() < 10 {
                 return Err(OrchestratorError::config(format!(
                     "API key for {provider:?} appears to be invalid (too short)"
@@ -109,8 +121,8 @@ impl RealApiKeySource {
                     }
                 }
                 ProviderId::Random => {
-                    // Random provider doesn't need real validation - just accept any non-empty string
-                    // This allows users to set RANDOM_API_KEY=dummy for consistency
+                    // Should never reach here due to continue above
+                    unreachable!("Random provider validation should be skipped");
                 }
             }
         }

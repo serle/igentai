@@ -53,7 +53,29 @@ cp example.env .env
 export OPENAI_API_KEY="your-key-here"
 ```
 
-### 3. Run the System
+### 3. Configure Routing Strategy (Optional)
+
+The system supports multiple routing strategies for load balancing across providers:
+
+```bash
+# Single provider with backoff (default)
+ROUTING_STRATEGY=backoff
+ROUTING_PRIMARY_PROVIDER=openai
+
+# Round-robin across multiple providers
+ROUTING_STRATEGY=roundrobin
+ROUTING_PROVIDERS=openai,anthropic,gemini
+
+# Priority order (try cheapest first)
+ROUTING_STRATEGY=priority
+ROUTING_PROVIDERS=gemini,openai,anthropic
+
+# Weighted distribution
+ROUTING_STRATEGY=weighted
+ROUTING_WEIGHTS=openai:0.5,anthropic:0.3,gemini:0.2
+```
+
+### 4. Run the System
 
 Choose between two modes:
 
@@ -114,7 +136,10 @@ Key Options:
   --topic <TOPIC>              Topic for generation (enables CLI mode)
   --producers <N>              Number of producer processes (default: 5)
   --iterations <N>             Max iterations per producer (default: unlimited)
+  --max-requests <N>           Max requests per producer (overrides iterations)
   --provider <PROVIDER>        "env" for real APIs, "random" for test data
+  --routing-strategy <STRATEGY> Load balancing: backoff, roundrobin, priority, weighted
+  --routing-provider <PROVIDER> Primary provider for routing decisions
   --output <DIR>               Output directory (default: ./output/<topic>)
   --log-level <LEVEL>          Logging detail: info, debug, trace (default: info)
   --help                       Display all available options with full descriptions
@@ -132,14 +157,17 @@ Key Options:
 ### Real Generation (Requires API Keys)
 
 ```bash
-# Basic generation
+# Basic generation with default backoff routing
 ./target/release/orchestrator --topic "Renewable Energy" --producers 3
 
-# Limited iterations for cost control
-./target/release/orchestrator --topic "AI Ethics" --producers 5 --iterations 50
+# Limited requests for cost control
+./target/release/orchestrator --topic "AI Ethics" --producers 5 --max-requests 50
 
-# Custom output location
-./target/release/orchestrator --topic "Space Technology" --output ./research/space --iterations 100
+# Custom routing strategy
+./target/release/orchestrator --topic "Space Technology" --routing-strategy roundrobin --routing-provider openai
+
+# Multiple providers with priority routing
+./target/release/orchestrator --topic "Climate Change" --routing-strategy priority --max-requests 100
 ```
 
 ### Web Mode Usage

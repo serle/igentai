@@ -3,6 +3,7 @@
 use clap::Parser;
 use producer::types::ExecutionConfig;
 use producer::{Producer, ProducerConfig, RealApiClient, RealCommunicator};
+use shared::types::RoutingStrategy;
 use shared::{logging, process_debug, process_error, process_info, process_warn, ProcessId, ProviderId};
 use std::collections::HashMap;
 use std::env;
@@ -39,6 +40,10 @@ struct Args {
     #[arg(long, default_value = "env")]
     provider: String,
 
+    /// Routing configuration from orchestrator (format: "strategy:backoff,provider:openai")
+    #[arg(long)]
+    routing_config: Option<String>,
+
     /// CLI mode: Request size (number of items to request per API call)
     #[arg(long, default_value = "60")]
     request_size: usize,
@@ -74,6 +79,220 @@ struct Args {
     /// Random API key (not required - Random provider works without API key)
     #[arg(long)]
     random_key: Option<String>,
+
+    /// Routing strategy: backoff, roundrobin, priority, weighted (default: backoff)
+    #[arg(long, default_value = "backoff")]
+    routing_strategy: String,
+
+    /// Provider for backoff strategy (default: random for test, from env for production)
+    #[arg(long)]
+    routing_provider: Option<String>,
+
+    /// Comma-separated list of providers for roundrobin/priority strategies
+    #[arg(long)]
+    routing_providers: Option<String>,
+
+    /// Provider weights for weighted strategy (format: "openai:0.5,anthropic:0.3")
+    #[arg(long)]
+    routing_weights: Option<String>,
+
+    /// Maximum requests for testing (limits how many generation cycles to run)
+    #[arg(long)]
+    max_requests: Option<u32>,
+}
+
+/// Parse routing configuration from orchestrator
+fn parse_routing_config(routing_config: &str) -> Result<(RoutingStrategy, ProviderId), String> {
+    let parts: Vec<&str> = routing_config.split(',').collect();
+    let mut strategy_type = None;
+    let mut provider = None;
+    let mut providers = None;
+    let mut weights = None;
+
+    for part in parts {
+        let kv: Vec<&str> = part.split(':').collect();
+        if kv.len() != 2 {
+            return Err(format!("Invalid routing config format: '{}'", part));
+        }
+        
+        match kv[0] {
+            "strategy" => strategy_type = Some(kv[1]),
+            "provider" => provider = Some(kv[1]),
+            "providers" => providers = Some(kv[1]),
+            "weights" => weights = Some(kv[1]),
+            _ => return Err(format!("Unknown routing config key: '{}'", kv[0])),
+        }
+    }
+
+    let strategy = match strategy_type {
+        Some("backoff") => {
+            let provider_id = provider
+                .ok_or("backoff strategy requires provider")?
+                .parse()
+                .map_err(|e| format!("Invalid provider: {}", e))?;
+            (RoutingStrategy::Backoff { provider: provider_id }, provider_id)
+        },
+        Some("roundrobin") => {
+            let provider_list = providers
+                .ok_or("roundrobin strategy requires providers")?
+                .split('+')
+                .map(|p| p.parse())
+                .collect::<Result<Vec<ProviderId>, _>>()
+                .map_err(|e| format!("Invalid provider in list: {}", e))?;
+            let primary = provider_list.get(0).cloned().unwrap_or(ProviderId::Random);
+            (RoutingStrategy::RoundRobin { providers: provider_list }, primary)
+        },
+        Some("priority") => {
+            let provider_list = providers
+                .ok_or("priority strategy requires providers")?
+                .split('+')
+                .map(|p| p.parse())
+                .collect::<Result<Vec<ProviderId>, _>>()
+                .map_err(|e| format!("Invalid provider in list: {}", e))?;
+            let primary = provider_list.get(0).cloned().unwrap_or(ProviderId::Random);
+            (RoutingStrategy::PriorityOrder { providers: provider_list }, primary)
+        },
+        Some("weighted") => {
+            let weight_pairs = weights
+                .ok_or("weighted strategy requires weights")?
+                .split('+')
+                .map(|pair| {
+                    let kv: Vec<&str> = pair.split(':').collect();
+                    if kv.len() != 2 {
+                        return Err(format!("Invalid weight format: '{}'", pair));
+                    }
+                    let provider: ProviderId = kv[0].parse()
+                        .map_err(|e| format!("Invalid provider '{}': {}", kv[0], e))?;
+                    let weight: f32 = kv[1].parse()
+                        .map_err(|e| format!("Invalid weight '{}': {}", kv[1], e))?;
+                    Ok((provider, weight))
+                })
+                .collect::<Result<HashMap<ProviderId, f32>, String>>()?;
+            let primary = weight_pairs.keys().next().cloned().unwrap_or(ProviderId::Random);
+            (RoutingStrategy::Weighted { weights: weight_pairs }, primary)
+        },
+        Some(s) => return Err(format!("Unknown strategy: '{}'", s)),
+        None => return Err("Missing strategy in routing config".to_string()),
+    };
+
+    Ok(strategy)
+}
+
+/// Parse routing strategy from command-line arguments with env fallback
+fn parse_routing_strategy(args: &Args, use_test_provider: bool) -> Result<RoutingStrategy, String> {
+    // First check if we should use environment-based routing entirely
+    let strategy_type = if args.routing_strategy == "backoff" && args.routing_provider.is_none() 
+        && args.routing_providers.is_none() && args.routing_weights.is_none() {
+        // No routing args provided, check environment
+        env::var("ROUTING_STRATEGY").unwrap_or_else(|_| args.routing_strategy.clone())
+    } else {
+        args.routing_strategy.clone()
+    };
+    
+    match strategy_type.to_lowercase().as_str() {
+        "backoff" => {
+            let provider = if let Some(ref provider_str) = args.routing_provider {
+                // Command-line arg takes priority
+                provider_str.parse()
+                    .map_err(|e| format!("Invalid routing provider '{}': {}", provider_str, e))?
+            } else if use_test_provider {
+                // Test mode defaults to random
+                ProviderId::Random
+            } else {
+                // Production mode: try to get from environment or default to random
+                match env::var("ROUTING_PRIMARY_PROVIDER") {
+                    Ok(p) => p.parse()
+                        .map_err(|e| format!("Invalid ROUTING_PRIMARY_PROVIDER '{}': {}", p, e))?,
+                    Err(_) => ProviderId::Random,
+                }
+            };
+            Ok(RoutingStrategy::Backoff { provider })
+        }
+        "roundrobin" => {
+            let providers = if args.routing_providers.is_some() {
+                parse_provider_list(&args.routing_providers)?
+            } else {
+                // Try environment variable
+                let env_providers = env::var("ROUTING_PROVIDERS").ok();
+                parse_provider_list(&env_providers)?
+            };
+            if providers.is_empty() {
+                return Err("--routing-providers or ROUTING_PROVIDERS env must be specified for roundrobin strategy".to_string());
+            }
+            Ok(RoutingStrategy::RoundRobin { providers })
+        }
+        "priority" => {
+            let providers = if args.routing_providers.is_some() {
+                parse_provider_list(&args.routing_providers)?
+            } else {
+                // Try environment variable
+                let env_providers = env::var("ROUTING_PROVIDERS").ok();
+                parse_provider_list(&env_providers)?
+            };
+            if providers.is_empty() {
+                return Err("--routing-providers or ROUTING_PROVIDERS env must be specified for priority strategy".to_string());
+            }
+            Ok(RoutingStrategy::PriorityOrder { providers })
+        }
+        "weighted" => {
+            let weights_str = if let Some(ref w) = args.routing_weights {
+                w.clone()
+            } else {
+                env::var("ROUTING_WEIGHTS")
+                    .map_err(|_| "--routing-weights or ROUTING_WEIGHTS env must be specified for weighted strategy".to_string())?
+            };
+            
+            let weights = parse_weights(&weights_str)?;
+            if weights.is_empty() {
+                return Err("No valid weights provided".to_string());
+            }
+            Ok(RoutingStrategy::Weighted { weights })
+        }
+        _ => Err(format!("Unknown routing strategy '{}'. Valid options: backoff, roundrobin, priority, weighted", args.routing_strategy)),
+    }
+}
+
+/// Parse comma-separated provider list
+fn parse_provider_list(providers_str: &Option<String>) -> Result<Vec<ProviderId>, String> {
+    match providers_str {
+        Some(s) => s
+            .split(',')
+            .map(|p| p.trim().parse())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Invalid provider in list: {}", e)),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Parse provider weights (format: "provider1:weight1,provider2:weight2")
+fn parse_weights(weights_str: &str) -> Result<HashMap<ProviderId, f32>, String> {
+    let mut weights = HashMap::new();
+    
+    for pair in weights_str.split(',') {
+        let parts: Vec<&str> = pair.split(':').collect();
+        if parts.len() != 2 {
+            return Err(format!("Invalid weight format '{}'. Expected 'provider:weight'", pair));
+        }
+        
+        let provider: ProviderId = parts[0].trim().parse()
+            .map_err(|e| format!("Invalid provider '{}': {}", parts[0], e))?;
+        let weight: f32 = parts[1].trim().parse()
+            .map_err(|e| format!("Invalid weight '{}': {}", parts[1], e))?;
+        
+        if weight < 0.0 || weight > 1.0 {
+            return Err(format!("Weight {} must be between 0.0 and 1.0", weight));
+        }
+        
+        weights.insert(provider, weight);
+    }
+    
+    // Validate weights sum to approximately 1.0
+    let sum: f32 = weights.values().sum();
+    if (sum - 1.0).abs() > 0.01 {
+        return Err(format!("Weights sum to {:.3}, but should sum to 1.0", sum));
+    }
+    
+    Ok(weights)
 }
 
 #[tokio::main]
@@ -93,7 +312,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Determine operating mode based on orchestrator address availability (like webserver)
     let standalone_mode = args.orchestrator_addr.is_none();
     let cli_mode = args.topic.is_some() || standalone_mode; // CLI mode includes standalone mode
-    let use_test_provider = cli_mode && args.provider == "random";
+    
+    // Determine provider selection - prioritize routing config from orchestrator
+    let (use_test_provider, primary_provider) = if let Some(ref routing_config) = args.routing_config {
+        // Parse routing configuration from orchestrator
+        let (_, primary_provider) = parse_routing_config(routing_config)
+            .map_err(|e| format!("Failed to parse routing config: {}", e))?;
+        let use_test = primary_provider == ProviderId::Random;
+        process_debug!(ProcessId::current(), "🎯 Using routing config: '{}' -> provider: {:?}", routing_config, primary_provider);
+        (use_test, Some(primary_provider))
+    } else {
+        // Fallback to old provider argument logic
+        let use_test = cli_mode && args.provider == "random";
+        process_debug!(ProcessId::current(), "🎯 Using provider argument: '{}' -> test mode: {}", args.provider, use_test);
+        (use_test, None)
+    };
 
     // Create producer configuration
     let topic = if args.topic.is_some() {
@@ -103,6 +336,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         "Production generation topic".to_string()
     };
+
+    process_debug!(ProcessId::current(), "🎯 Producer main - topic set to: '{}'", topic);
+    process_debug!(ProcessId::current(), "🎯 Producer main - args.topic: {:?}", args.topic);
+    process_debug!(ProcessId::current(), "🎯 Producer main - standalone_mode: {}", standalone_mode);
 
     let orchestrator_addr = if standalone_mode {
         "127.0.0.1:0".parse().unwrap() // Dummy address for standalone mode
@@ -183,21 +420,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     } else {
         // Production/CLI mode with env provider - collect all available keys
-        if let Some(key) = args.openai_key.or_else(|| env::var("OPENAI_API_KEY").ok()) {
+        if let Some(key) = args.openai_key.as_ref().cloned().or_else(|| env::var("OPENAI_API_KEY").ok()) {
             api_keys.insert(ProviderId::OpenAI, key);
             process_debug!(ProcessId::current(), "OpenAI API key configured");
         } else {
             process_warn!(ProcessId::current(), "⚠️ OpenAI API key not provided");
         }
 
-        if let Some(key) = args.anthropic_key.or_else(|| env::var("ANTHROPIC_API_KEY").ok()) {
+        if let Some(key) = args.anthropic_key.as_ref().cloned().or_else(|| env::var("ANTHROPIC_API_KEY").ok()) {
             api_keys.insert(ProviderId::Anthropic, key);
             process_debug!(ProcessId::current(), "Anthropic API key configured");
         } else {
             process_warn!(ProcessId::current(), "⚠️ Anthropic API key not provided");
         }
 
-        if let Some(key) = args.gemini_key.or_else(|| env::var("GEMINI_API_KEY").ok()) {
+        if let Some(key) = args.gemini_key.as_ref().cloned().or_else(|| env::var("GEMINI_API_KEY").ok()) {
             api_keys.insert(ProviderId::Gemini, key);
             process_debug!(ProcessId::current(), "Gemini API key configured");
         } else {
@@ -205,7 +442,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Random provider (always available as fallback)
-        if let Some(key) = args.random_key.or_else(|| env::var("RANDOM_API_KEY").ok()) {
+        if let Some(key) = args.random_key.as_ref().cloned().or_else(|| env::var("RANDOM_API_KEY").ok()) {
             api_keys.insert(ProviderId::Random, key);
             process_debug!(
                 ProcessId::current(),
@@ -247,6 +484,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RealCommunicator::new(orchestrator_addr, ProcessId::current().clone())
     };
 
+    // Parse routing strategy from command-line arguments
+    let routing_strategy = parse_routing_strategy(&args, use_test_provider)
+        .map_err(|e| format!("Invalid routing strategy: {}", e))?;
+    
+    process_info!(ProcessId::current(), "🎯 Routing strategy: {:?}", routing_strategy);
+    
     // Create execution configuration
     let orchestrator_endpoint = if standalone_mode {
         None
@@ -257,7 +500,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         orchestrator_endpoint,
         config.topic.clone(),
         Some(2),                                       // 2 second interval
-        if standalone_mode { Some(50) } else { None }, // Only limit iterations in standalone mode
+        args.max_requests.or_else(|| if standalone_mode { Some(50) } else { None }), // Use command-line arg or default to 50 for standalone
+        Some(routing_strategy),
     )
     .map_err(|e| format!("Failed to create execution config: {}", e))?;
 

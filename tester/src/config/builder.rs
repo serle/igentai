@@ -103,6 +103,18 @@ impl OrchestratorConfigBuilder {
         self
     }
 
+    /// Set routing strategy (backoff, roundrobin, priority, weighted)
+    pub fn routing_strategy<S: Into<String>>(mut self, strategy: S) -> Self {
+        self.config.routing_strategy = Some(strategy.into());
+        self
+    }
+
+    /// Set routing provider (for backoff strategy)
+    pub fn routing_provider<S: Into<String>>(mut self, provider: S) -> Self {
+        self.config.routing_provider = Some(provider.into());
+        self
+    }
+
     /// Build the configuration
     pub fn build(mut self) -> OrchestratorConfig {
         self.config.fault_tolerance = self.fault_tolerance_config;

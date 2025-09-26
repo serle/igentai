@@ -145,6 +145,8 @@ where
         producer_count: u32,
         iterations: Option<u32>,
         request_size: usize,
+        routing_strategy: Option<String>,
+        routing_provider: Option<String>,
     ) -> OrchestratorResult<()> {
         process_debug!(ProcessId::current(), "🚀 Starting CLI generation");
 
@@ -170,7 +172,7 @@ where
         process_info!(ProcessId::current(), "✅ Topic '{}' started {}", topic, budget_str);
 
         // Start generation with a fake request ID and custom request size
-        self.start_generation_with_config(1, topic, producer_count, optimization_mode, constraints, request_size)
+        self.start_generation_with_config(1, topic, producer_count, optimization_mode, constraints, request_size, routing_strategy, routing_provider)
             .await?;
 
         Ok(())
@@ -384,6 +386,8 @@ where
         optimization_mode: OptimizationMode,
         constraints: GenerationConstraints,
         request_size: usize,
+        routing_strategy_override: Option<String>,
+        routing_provider_override: Option<String>,
     ) -> OrchestratorResult<()> {
         // Get iteration budget from state and log topic start consistently
         let budget_str = {
@@ -407,11 +411,67 @@ where
             state.start_generation(topic.clone(), optimization_mode, constraints);
         }
 
-        // Spawn producers
+        // Generate initial prompt and configuration with custom request_size
+        let (prompt, mut routing_strategy, mut generation_config) = {
+            let state = self.state.lock().await;
+            let optimizer = state.get_optimizer();
+            let optimization = optimizer.optimize_for_topic(
+                &topic,
+                &state.get_performance_stats(),
+                &state.context.optimization_targets.optimization_mode,
+            )?;
+
+            tracing::debug!("🎯 CLI Orchestrator generated prompt: '{}'", optimization.optimized_prompt);
+            tracing::debug!("🎯 CLI Topic: '{}', Routing: {:?}", topic, optimization.routing_strategy);
+
+            (
+                optimization.optimized_prompt,
+                optimization.routing_strategy,
+                optimization.generation_config,
+            )
+        };
+
+        // Apply CLI routing overrides if provided
+        if let (Some(strategy), Some(provider)) = (&routing_strategy_override, &routing_provider_override) {
+            let provider_id = match provider.to_lowercase().as_str() {
+                "openai" => shared::ProviderId::OpenAI,
+                "anthropic" => shared::ProviderId::Anthropic,
+                "gemini" => shared::ProviderId::Gemini,
+                "random" => shared::ProviderId::Random,
+                _ => {
+                    tracing::warn!("⚠️ Unknown routing provider '{}', using Random", provider);
+                    shared::ProviderId::Random
+                }
+            };
+
+            routing_strategy = match strategy.to_lowercase().as_str() {
+                "backoff" => shared::RoutingStrategy::Backoff { provider: provider_id },
+                "roundrobin" => shared::RoutingStrategy::RoundRobin { providers: vec![provider_id] },
+                "priority" => shared::RoutingStrategy::PriorityOrder { providers: vec![provider_id] },
+                "weighted" => shared::RoutingStrategy::Weighted { weights: std::collections::HashMap::from([(provider_id, 1.0)]) },
+                _ => {
+                    tracing::warn!("⚠️ Unknown routing strategy '{}', using Backoff", strategy);
+                    shared::RoutingStrategy::Backoff { provider: provider_id }
+                }
+            };
+
+            tracing::debug!("🎯 CLI routing override: {} with provider {}", strategy, provider);
+        } else if api_keys.len() == 1 && api_keys.contains_key(&shared::ProviderId::Random) {
+            // Fallback: Override routing strategy for test mode (single Random provider)
+            routing_strategy = shared::RoutingStrategy::Backoff {
+                provider: shared::ProviderId::Random,
+            };
+            tracing::debug!("🎯 Test mode: using Random provider fallback");
+        }
+
+        // Override request_size with CLI parameter
+        generation_config.request_size = request_size;
+
+        // Spawn producers with the finalized routing strategy
         let producer_addr = self.producer_addr.expect("Producer address not initialized");
         let producer_infos = self
             .process_manager
-            .spawn_producers(producer_count, &topic, api_keys.clone(), producer_addr)
+            .spawn_producers(producer_count, &topic, api_keys.clone(), producer_addr, Some(routing_strategy.clone()))
             .await?;
 
         // Register producers with communicator
@@ -423,33 +483,6 @@ where
 
         // Note: Producers will send Ready signals when their IPC listeners are initialized
         // No more artificial delays needed!
-
-        // Generate initial prompt and configuration with custom request_size
-        let (prompt, mut routing_strategy, mut generation_config) = {
-            let state = self.state.lock().await;
-            let optimizer = state.get_optimizer();
-            let optimization = optimizer.optimize_for_topic(
-                &topic,
-                &state.get_performance_stats(),
-                &state.context.optimization_targets.optimization_mode,
-            )?;
-
-            (
-                optimization.optimized_prompt,
-                optimization.routing_strategy,
-                optimization.generation_config,
-            )
-        };
-
-        // Override routing strategy for test mode (single Random provider)
-        if api_keys.len() == 1 && api_keys.contains_key(&shared::ProviderId::Random) {
-            routing_strategy = shared::RoutingStrategy::Backoff {
-                provider: shared::ProviderId::Random,
-            };
-        }
-
-        // Override request_size with CLI parameter
-        generation_config.request_size = request_size;
 
         // Queue start commands for all producers (will be sent when they become ready)
         {
@@ -503,7 +536,7 @@ where
         let producer_addr = self.producer_addr.expect("Producer address not initialized");
         let producer_infos = self
             .process_manager
-            .spawn_producers(producer_count, &topic, api_keys, producer_addr)
+            .spawn_producers(producer_count, &topic, api_keys, producer_addr, None)
             .await?;
 
         // Register producers with communicator
@@ -522,6 +555,9 @@ where
                 &state.get_performance_stats(),
                 &state.context.optimization_targets.optimization_mode,
             )?;
+
+            tracing::debug!("🎯 Orchestrator generated prompt: '{}'", optimization.optimized_prompt);
+            tracing::debug!("🎯 Topic: '{}', Routing: {:?}", topic, optimization.routing_strategy);
 
             (
                 optimization.optimized_prompt,
@@ -1048,7 +1084,7 @@ where
             let producer_addr = self.producer_addr.expect("Producer address not initialized");
             let producer_infos = self
                 .process_manager
-                .spawn_producers(1, &topic, api_keys, producer_addr)
+                .spawn_producers(1, &topic, api_keys, producer_addr, None)
                 .await?;
 
             if let Some(new_producer_info) = producer_infos.first() {

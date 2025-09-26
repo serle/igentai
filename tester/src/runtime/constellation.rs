@@ -40,8 +40,11 @@ impl ServiceConstellation {
             final_config.trace_endpoint = Some(self.trace_endpoint.clone());
         }
 
-        let mut cmd = Command::new("./target/release/orchestrator");
+        let mut cmd = Command::new("./target/debug/orchestrator");
         cmd.args(final_config.to_args());
+        
+        // Set the current directory to project root to ensure .env file is loaded
+        cmd.current_dir(".");
 
         let child = cmd.spawn()?;
         self.orchestrator = Some(child);

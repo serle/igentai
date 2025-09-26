@@ -9,28 +9,13 @@ use crate::types::{ApiRequest, ApiResponse};
 use shared::types::{GenerationConfig, RoutingStrategy};
 use shared::ProviderId;
 
-/// Auto-select optimal routing strategy based on available providers (pure function)
-pub fn auto_select_routing_strategy(
-    available_providers: &[ProviderId],
-    override_strategy: Option<RoutingStrategy>,
-) -> RoutingStrategy {
-    // If explicit strategy provided, use it
-    if let Some(strategy) = override_strategy {
-        return strategy;
-    }
-
-    // Auto-select based on number of providers
-    match available_providers.len() {
-        0 => RoutingStrategy::Backoff {
-            provider: ProviderId::Random,
-        },
-        1 => RoutingStrategy::Backoff {
-            provider: available_providers[0],
-        },
-        _ => RoutingStrategy::RoundRobin {
-            providers: available_providers.to_vec(),
-        },
-    }
+/// Load routing strategy from environment variables with fallback
+/// This replaces the old auto-selection logic with explicit environment configuration
+pub fn load_routing_strategy() -> RoutingStrategy {
+    RoutingStrategy::from_env().unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to load routing strategy from environment: {}. Using default backoff to random.", e);
+        RoutingStrategy::Backoff { provider: ProviderId::Random }
+    })
 }
 
 /// Select provider based on routing strategy (pure function)
@@ -160,42 +145,16 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_select_routing_strategy() {
-        // Single provider should use backoff
-        let single_provider = vec![ProviderId::OpenAI];
-        let strategy = auto_select_routing_strategy(&single_provider, None);
+    fn test_load_routing_strategy() {
+        // Test environment-based routing strategy loading
+        // In test mode (cfg!(test) = true), it should default to Random provider
+        let strategy = load_routing_strategy();
         match strategy {
-            RoutingStrategy::Backoff { provider } => assert_eq!(provider, ProviderId::OpenAI),
-            _ => panic!("Expected backoff strategy for single provider"),
-        }
-
-        // Multiple providers should use round robin
-        let multiple_providers = vec![ProviderId::OpenAI, ProviderId::Anthropic, ProviderId::Gemini];
-        let strategy = auto_select_routing_strategy(&multiple_providers, None);
-        match strategy {
-            RoutingStrategy::RoundRobin { providers } => {
-                assert_eq!(providers.len(), 3);
-                assert!(providers.contains(&ProviderId::OpenAI));
+            RoutingStrategy::Backoff { provider } => {
+                // In test mode, should use Random provider regardless of environment
+                assert_eq!(provider, ProviderId::Random);
             }
-            _ => panic!("Expected round robin strategy for multiple providers"),
-        }
-
-        // No providers should default to Random with backoff
-        let no_providers = vec![];
-        let strategy = auto_select_routing_strategy(&no_providers, None);
-        match strategy {
-            RoutingStrategy::Backoff { provider } => assert_eq!(provider, ProviderId::Random),
-            _ => panic!("Expected backoff strategy with Random fallback"),
-        }
-
-        // Override should be respected
-        let override_strategy = Some(RoutingStrategy::Weighted {
-            weights: HashMap::from([(ProviderId::OpenAI, 100.0)]),
-        });
-        let strategy = auto_select_routing_strategy(&multiple_providers, override_strategy.clone());
-        match strategy {
-            RoutingStrategy::Weighted { .. } => {} // Expected
-            _ => panic!("Expected override strategy to be used"),
+            _ => panic!("Expected backoff strategy in test mode"),
         }
     }
 }

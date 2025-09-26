@@ -1,28 +1,27 @@
 //! Command generation for test mode simulation
 
-use crate::core::utils::auto_select_routing_strategy;
-use shared::types::GenerationConfig;
+use shared::types::{GenerationConfig, RoutingStrategy};
 use shared::{ProducerCommand, ProviderId};
 use std::time::{Duration, Instant};
 
 /// Generates commands for test mode simulation
 #[derive(Debug)]
 pub struct CommandGenerator {
-    available_providers: Vec<ProviderId>,
     iteration_count: u32,
     max_iterations: Option<u32>,
     last_request: Instant,
     request_interval: Duration,
+    routing_strategy: RoutingStrategy,
 }
 
 impl CommandGenerator {
-    pub fn new(available_providers: Vec<ProviderId>, max_iterations: Option<u32>, interval: Duration) -> Self {
+    pub fn new(max_iterations: Option<u32>, interval: Duration, routing_strategy: RoutingStrategy) -> Self {
         Self {
-            available_providers,
             iteration_count: 0,
             max_iterations,
             last_request: Instant::now() - interval, // Allow immediate first request
             request_interval: interval,
+            routing_strategy,
         }
     }
 
@@ -49,8 +48,8 @@ impl CommandGenerator {
 
         // Generate start command on first iteration
         if self.iteration_count == 1 {
-            // Auto-select optimal routing strategy based on available providers
-            let routing_strategy = auto_select_routing_strategy(&self.available_providers, None);
+            // Use the routing strategy provided during construction
+            let routing_strategy = self.routing_strategy.clone();
 
             Some(ProducerCommand::Start {
                 command_id: 1,
@@ -75,8 +74,12 @@ impl CommandGenerator {
         self.iteration_count
     }
 
-    pub fn get_available_providers(&self) -> &[ProviderId] {
-        &self.available_providers
+    /// Get current routing strategy from environment
+    pub fn get_routing_strategy() -> RoutingStrategy {
+        RoutingStrategy::from_env().unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to load routing strategy from environment: {}. Using default backoff to random.", e);
+            RoutingStrategy::Backoff { provider: ProviderId::Random }
+        })
     }
 }
 
@@ -87,17 +90,16 @@ mod tests {
 
     #[test]
     fn test_command_generator_creation() {
-        let providers = vec![ProviderId::OpenAI, ProviderId::Anthropic];
-        let generator = CommandGenerator::new(providers.clone(), Some(10), Duration::from_secs(1));
+        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderId::Random };
+        let generator = CommandGenerator::new(Some(10), Duration::from_secs(1), routing_strategy);
 
         assert_eq!(generator.get_iteration_count(), 0);
-        assert_eq!(generator.get_available_providers(), &providers);
     }
 
     #[test]
     fn test_command_generator_first_command() {
-        let providers = vec![ProviderId::OpenAI];
-        let mut generator = CommandGenerator::new(providers, Some(10), Duration::from_secs(1));
+        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderId::Random };
+        let mut generator = CommandGenerator::new(Some(10), Duration::from_secs(1), routing_strategy);
 
         let command = generator.next_command("test prompt");
         assert!(command.is_some());
@@ -111,8 +113,8 @@ mod tests {
         {
             assert_eq!(topic, "test_topic");
             assert_eq!(prompt, "test prompt");
-            // Single provider should use backoff strategy
-            assert!(matches!(routing_strategy, RoutingStrategy::Backoff { .. }));
+            // In test mode, should use backoff strategy with Random provider
+            assert!(matches!(routing_strategy, RoutingStrategy::Backoff { provider: ProviderId::Random }));
         } else {
             panic!("Expected Start command");
         }
@@ -122,8 +124,8 @@ mod tests {
 
     #[test]
     fn test_command_generator_max_iterations() {
-        let providers = vec![ProviderId::Random];
-        let mut generator = CommandGenerator::new(providers, Some(1), Duration::from_millis(1));
+        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderId::Random };
+        let mut generator = CommandGenerator::new(Some(1), Duration::from_millis(1), routing_strategy);
 
         // First command should be Start
         let first = generator.next_command("test");
@@ -139,8 +141,8 @@ mod tests {
 
     #[test]
     fn test_command_generator_interval_throttling() {
-        let providers = vec![ProviderId::Random];
-        let mut generator = CommandGenerator::new(providers, None, Duration::from_secs(1));
+        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderId::Random };
+        let mut generator = CommandGenerator::new(None, Duration::from_secs(1), routing_strategy);
 
         // First command should succeed
         let first = generator.next_command("test");

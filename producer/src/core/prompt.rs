@@ -2,7 +2,7 @@
 
 use crate::core::processor::Processor;
 use crate::types::ProducerState;
-use shared::{GenerationConfig, ProviderId};
+use shared::{GenerationConfig, ProviderId, process_debug, ProcessId};
 use std::collections::HashMap;
 
 /// Provider context window and token limits
@@ -167,6 +167,10 @@ impl PromptHandler {
         // Get request size from generation config
         let request_size = generation_config.map(|gc| gc.request_size).unwrap_or(100);
 
+        // Debug log the prompt components
+        process_debug!(ProcessId::current(), "🎯 Prompt building - base_prompt: '{}'", base_prompt);
+        process_debug!(ProcessId::current(), "🎯 Prompt building - request_size: {}", request_size);
+
         // Build enhanced prompt with provider-optimized exclusion template
         let enhanced_prompt = format!(
             r#"Generate {request_size} new entries about: {base_prompt}
@@ -187,6 +191,14 @@ Remember:
 - One entry per line
 - Do NOT repeat any previously seen entries, even with slight variations"#
         );
+
+        // Debug log the final prompt (truncated for readability)
+        let prompt_preview = if enhanced_prompt.len() > 500 {
+            format!("{}... [truncated, total length: {}]", &enhanced_prompt[..500], enhanced_prompt.len())
+        } else {
+            enhanced_prompt.clone()
+        };
+        process_debug!(ProcessId::current(), "📝 Final prompt: {}", prompt_preview);
 
         enhanced_prompt
     }

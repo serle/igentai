@@ -16,6 +16,7 @@ pub async fn minimal(
         .topic("minimal")
         .producers(1)
         .iterations(Some(2))
+        .provider("random") // Use random provider for testing
         .build();
 
     constellation.start_orchestrator(config).await?;
@@ -41,6 +42,7 @@ pub async fn empty(
         .topic("empty")
         .producers(1)
         .iterations(Some(0)) // Zero iterations
+        .provider("random") // Use random provider for testing
         .build();
 
     constellation.start_orchestrator(config).await?;

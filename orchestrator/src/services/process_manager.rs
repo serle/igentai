@@ -100,6 +100,7 @@ impl RealProcessManager {
         _topic: &str,
         api_keys: &HashMap<ProviderId, String>,
         orchestrator_addr: SocketAddr,
+        routing_strategy: Option<&shared::RoutingStrategy>,
     ) -> OrchestratorResult<ProcessHandle> {
         // Determine if we're using test provider (Random only) or env provider
         let use_test_provider = api_keys.len() == 1 && api_keys.contains_key(&ProviderId::Random);
@@ -128,13 +129,81 @@ impl RealProcessManager {
         // Add log level
         cmd.arg("--log-level").arg(&self.log_level);
 
-        // Only pass CLI arguments when in CLI mode (when spawned from orchestrator CLI mode)
-        // In production mode, configuration comes through IPC Start message
-        // For now, we'll always pass these since the orchestrator is controlling the producer
-        if use_test_provider {
-            cmd.arg("--provider").arg("random");
+        // Pass structured routing configuration to producer
+        if let Some(routing) = routing_strategy {
+            let routing_config = match routing {
+                shared::RoutingStrategy::Backoff { provider } => {
+                    let provider_name = match provider {
+                        shared::ProviderId::OpenAI => "openai",
+                        shared::ProviderId::Anthropic => "anthropic", 
+                        shared::ProviderId::Gemini => "gemini",
+                        shared::ProviderId::Random => "random",
+                    };
+                    format!("strategy:backoff,provider:{}", provider_name)
+                },
+                shared::RoutingStrategy::RoundRobin { providers } => {
+                    let provider_list = providers.iter()
+                        .map(|p| match p {
+                            shared::ProviderId::OpenAI => "openai",
+                            shared::ProviderId::Anthropic => "anthropic",
+                            shared::ProviderId::Gemini => "gemini",
+                            shared::ProviderId::Random => "random",
+                        })
+                        .collect::<Vec<_>>()
+                        .join("+");
+                    format!("strategy:roundrobin,providers:{}", provider_list)
+                },
+                shared::RoutingStrategy::PriorityOrder { providers } => {
+                    let provider_list = providers.iter()
+                        .map(|p| match p {
+                            shared::ProviderId::OpenAI => "openai",
+                            shared::ProviderId::Anthropic => "anthropic",
+                            shared::ProviderId::Gemini => "gemini",
+                            shared::ProviderId::Random => "random",
+                        })
+                        .collect::<Vec<_>>()
+                        .join("+");
+                    format!("strategy:priority,providers:{}", provider_list)
+                },
+                shared::RoutingStrategy::Weighted { weights } => {
+                    let weights_str = weights.iter()
+                        .map(|(provider, weight)| {
+                            let provider_name = match provider {
+                                shared::ProviderId::OpenAI => "openai",
+                                shared::ProviderId::Anthropic => "anthropic",
+                                shared::ProviderId::Gemini => "gemini",
+                                shared::ProviderId::Random => "random",
+                            };
+                            format!("{}:{}", provider_name, weight)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("+");
+                    format!("strategy:weighted,weights:{}", weights_str)
+                }
+            };
+            
+            cmd.arg("--routing-config").arg(routing_config);
+            
+            // Add default model for now (TODO: make this configurable)
+            let default_model = match routing {
+                shared::RoutingStrategy::Backoff { provider } => match provider {
+                    shared::ProviderId::OpenAI => "gpt-4o-mini",
+                    shared::ProviderId::Anthropic => "claude-3-sonnet",
+                    shared::ProviderId::Gemini => "gemini-pro",
+                    shared::ProviderId::Random => "random",
+                },
+                _ => "gpt-4o-mini", // Default model for multi-provider strategies
+            };
+            cmd.arg("--model").arg(default_model);
         } else {
-            cmd.arg("--provider").arg("env");
+            // Fallback: use test provider if only Random keys available
+            if use_test_provider {
+                cmd.arg("--routing-config").arg("strategy:backoff,provider:random");
+                cmd.arg("--model").arg("random");
+            } else {
+                cmd.arg("--routing-config").arg("strategy:backoff,provider:openai");
+                cmd.arg("--model").arg("gpt-4o-mini");
+            }
         }
 
         // Add API keys as environment variables (except for Random provider which doesn't need a key)
@@ -200,6 +269,7 @@ impl ProcessManager for RealProcessManager {
         topic: &str,
         api_keys: HashMap<ProviderId, String>,
         orchestrator_addr: std::net::SocketAddr,
+        routing_strategy: Option<shared::RoutingStrategy>,
     ) -> OrchestratorResult<Vec<ProducerInfo>> {
         if api_keys.is_empty() {
             return Err(OrchestratorError::config("No API keys provided for producers"));
@@ -213,7 +283,7 @@ impl ProcessManager for RealProcessManager {
             let producer_id = i + 1;
 
             match self
-                .spawn_single_producer(producer_id, topic, &api_keys, orchestrator_addr)
+                .spawn_single_producer(producer_id, topic, &api_keys, orchestrator_addr, routing_strategy.as_ref())
                 .await
             {
                 Ok(handle) => {

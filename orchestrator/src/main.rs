@@ -50,6 +50,14 @@ pub struct Args {
     #[arg(long)]
     pub output: Option<String>,
 
+    /// Routing strategy for load balancing (backoff, roundrobin, priority, weighted)
+    #[arg(long)]
+    pub routing_strategy: Option<String>,
+
+    /// Routing provider for load balancing decisions (openai, random, etc.)
+    #[arg(long)]
+    pub routing_provider: Option<String>,
+
     /// Webserver bind address
     #[arg(long)]
     pub webserver_addr: Option<String>,
@@ -158,7 +166,7 @@ async fn main() -> OrchestratorResult<()> {
         // Start generation immediately with provided topic
         let topic = args.topic.unwrap();
         orchestrator
-            .start_cli_generation(topic, args.producers, args.iterations, args.request_size)
+            .start_cli_generation(topic, args.producers, args.iterations, args.request_size, args.routing_strategy, args.routing_provider)
             .await?;
     } else {
         // WebServer mode: Initialize with webserver

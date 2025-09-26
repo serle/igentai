@@ -3,6 +3,22 @@
 # Test script for orchestrator system
 # Usage: ./test.sh <topic> [workers] [iterations]
 
+# Change to the project root directory (script is in scripts/ subdirectory)
+cd "$(dirname "$0")/.."
+
+# Clear any inherited environment variables that might conflict with .env
+unset ROUTING_STRATEGY ROUTING_PRIMARY_PROVIDER ROUTING_PROVIDERS ROUTING_WEIGHTS 2>/dev/null || true
+
+# Load environment variables from .env file if it exists
+if [ -f ".env" ]; then
+    echo "📋 Loading environment from .env file..."
+    set -a  # Export all variables
+    source .env
+    set +a  # Stop exporting
+else
+    echo "⚠️  Warning: .env file not found - using system environment variables only"
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'

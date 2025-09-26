@@ -12,4 +12,4 @@ pub use metrics::Metrics;
 pub use processor::Processor;
 pub use producer::Producer;
 pub use prompt::PromptHandler;
-pub use utils::{auto_select_routing_strategy, build_api_request, select_provider, should_retry_request};
+pub use utils::{build_api_request, load_routing_strategy, select_provider, should_retry_request};

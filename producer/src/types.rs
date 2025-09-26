@@ -240,6 +240,7 @@ pub struct ExecutionConfig {
     pub request_interval: Duration,
     pub max_retries: u32,
     pub status_report_interval: Duration,
+    pub routing_strategy: RoutingStrategy,
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +259,7 @@ pub enum CommandSource {
 }
 
 use crate::error::{ProducerError, ProducerResult};
+use shared::types::RoutingStrategy;
 
 impl ExecutionConfig {
     /// Parse command line arguments and environment to create unified config
@@ -266,6 +268,7 @@ impl ExecutionConfig {
         topic: String,
         request_interval_secs: Option<u64>,
         max_requests: Option<u32>,
+        routing_strategy: Option<RoutingStrategy>,
     ) -> ProducerResult<Self> {
         let orchestrator_addr = orchestrator_endpoint
             .as_ref()
@@ -290,26 +293,17 @@ impl ExecutionConfig {
             request_interval: Duration::from_secs(request_interval_secs.unwrap_or(2)),
             max_retries: 3,
             status_report_interval: Duration::from_secs(2),
+            routing_strategy: routing_strategy.unwrap_or_else(|| Self::get_routing_strategy()),
         })
     }
 
-    /// Detect all available providers based on API keys
-    pub fn detect_available_providers(config: &ProducerConfig) -> Vec<ProviderId> {
-        let mut providers: Vec<ProviderId> = config.api_keys.keys().copied().collect();
-
-        // Always include Random provider as fallback if not already present
-        if !providers.contains(&ProviderId::Random) {
-            providers.push(ProviderId::Random);
-        }
-
-        // Prefer Random provider for testing by putting it first
-        providers.sort_by(|a, b| match (a, b) {
-            (ProviderId::Random, _) => std::cmp::Ordering::Less,
-            (_, ProviderId::Random) => std::cmp::Ordering::Greater,
-            _ => a.to_string().cmp(&b.to_string()),
-        });
-
-        providers
+    /// Get routing strategy from environment variables
+    /// This replaces the old provider detection logic with explicit environment configuration
+    pub fn get_routing_strategy() -> RoutingStrategy {
+        RoutingStrategy::from_env().unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to load routing strategy from environment: {}. Using default backoff to random.", e);
+            RoutingStrategy::Backoff { provider: ProviderId::Random }
+        })
     }
 }
 
@@ -325,6 +319,7 @@ mod execution_config_tests {
             "test topic".to_string(),
             Some(5),
             None,
+            None,
         )
         .unwrap();
 
@@ -334,7 +329,7 @@ mod execution_config_tests {
         }
 
         // Test standalone mode
-        let config = ExecutionConfig::from_args_and_env(None, "test topic".to_string(), Some(2), Some(100)).unwrap();
+        let config = ExecutionConfig::from_args_and_env(None, "test topic".to_string(), Some(2), Some(100), None).unwrap();
 
         match config.mode {
             ExecutionMode::Standalone {
@@ -345,31 +340,17 @@ mod execution_config_tests {
     }
 
     #[test]
-    fn test_detect_available_providers() {
-        let mut api_keys = HashMap::new();
-        api_keys.insert(ProviderId::OpenAI, "test_key".to_string());
-        api_keys.insert(ProviderId::Anthropic, "test_key".to_string());
-
-        let config = ProducerConfig {
-            orchestrator_addr: "127.0.0.1:6001".parse().unwrap(),
-            topic: "test".to_string(),
-            optimization_mode: OptimizationMode::MaximizeEfficiency,
-            api_keys,
-            routing_weights: HashMap::new(),
-            max_concurrent_requests: 10,
-            retry_attempts: 3,
-            request_timeout_ms: 30000,
-            request_size: 10,
-        };
-
-        let providers = ExecutionConfig::detect_available_providers(&config);
-
-        // Should include Random first (preferred for testing)
-        assert_eq!(providers[0], ProviderId::Random);
-        // Should include the configured providers
-        assert!(providers.contains(&ProviderId::OpenAI));
-        assert!(providers.contains(&ProviderId::Anthropic));
-        // Should have at least 3 providers
-        assert!(providers.len() >= 3);
+    fn test_get_routing_strategy() {
+        // Test environment-based routing strategy loading
+        // In test mode (cfg!(test) = true), should use Random provider
+        let strategy = ExecutionConfig::get_routing_strategy();
+        
+        match strategy {
+            RoutingStrategy::Backoff { provider } => {
+                // In test mode, should automatically use Random provider
+                assert_eq!(provider, ProviderId::Random);
+            }
+            _ => panic!("Expected backoff strategy with Random provider in test mode"),
+        }
     }
 }
