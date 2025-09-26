@@ -7,6 +7,7 @@ pub mod api_keys;
 pub mod communicator;
 pub mod file_system;
 pub mod process_manager;
+pub mod process_output_handler;
 
 // Re-export all service implementations
 pub use api_keys::RealApiKeySource;

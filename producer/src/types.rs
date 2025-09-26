@@ -302,7 +302,7 @@ impl ExecutionConfig {
     pub fn get_routing_strategy() -> RoutingStrategy {
         RoutingStrategy::from_env().unwrap_or_else(|e| {
             eprintln!("Warning: Failed to load routing strategy from environment: {}. Using default backoff to random.", e);
-            RoutingStrategy::Backoff { provider: ProviderId::Random }
+            RoutingStrategy::Backoff { provider: shared::types::ProviderConfig::with_default_model(shared::ProviderId::Random) }
         })
     }
 }
@@ -348,7 +348,7 @@ mod execution_config_tests {
         match strategy {
             RoutingStrategy::Backoff { provider } => {
                 // In test mode, should automatically use Random provider
-                assert_eq!(provider, ProviderId::Random);
+                assert_eq!(provider.provider, ProviderId::Random);
             }
             _ => panic!("Expected backoff strategy with Random provider in test mode"),
         }

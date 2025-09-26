@@ -21,8 +21,8 @@ impl TracingEndpoint {
     pub fn new(url: String) -> Self {
         Self {
             url,
-            batch_size: 50,
-            flush_interval: Duration::from_secs(1),
+            batch_size: 5,  // Reduced from 50 to 5 for faster visibility
+            flush_interval: Duration::from_millis(500),  // Reduced from 1s to 500ms
         }
     }
 }
@@ -93,8 +93,31 @@ impl HttpTracingLayer {
         HttpTracingLayer { sender: tx }
     }
 
+    /// Flush any remaining traces by sending a special flush signal
+    pub fn flush(&self) {
+        // Send a special flush event to trigger immediate batch sending
+        let flush_event = TraceEvent {
+            timestamp: Utc::now(),
+            level: "INFO".to_string(),
+            target: "tracing_flush".to_string(),
+            message: "Flushing traces on shutdown".to_string(),
+            process: ProcessId::current().to_string(),
+            fields: HashMap::new(),
+        };
+        let _ = self.sender.send(flush_event);
+        
+        // Give the background task a moment to process
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
     async fn send_batch(client: &reqwest::Client, endpoint_url: &str, events_buffer: &mut Vec<TraceEvent>) {
         let batch = std::mem::take(events_buffer);
+        let batch_size = batch.len();
+
+        // Debug: Print what process is sending traces
+        if let Some(first_event) = batch.first() {
+            eprintln!("🔍 Sending {} traces from process: {}", batch_size, first_event.process);
+        }
 
         match client
             .post(endpoint_url)
@@ -105,11 +128,13 @@ impl HttpTracingLayer {
         {
             Ok(response) => {
                 if !response.status().is_success() {
-                    eprintln!("Failed to send trace batch: HTTP {}", response.status());
+                    eprintln!("❌ Failed to send trace batch: HTTP {}", response.status());
+                } else {
+                    eprintln!("✅ Successfully sent {} traces to {}", batch_size, endpoint_url);
                 }
             }
             Err(e) => {
-                eprintln!("Failed to send trace batch: {e}");
+                eprintln!("❌ Failed to send trace batch: {e}");
             }
         }
     }
@@ -238,6 +263,19 @@ pub fn init_tracing_with_endpoint_and_level(endpoint: Option<TracingEndpoint>, l
 /// Initialize tracing subscriber with optional endpoint (backward compatibility)
 pub fn init_tracing_with_endpoint(endpoint: Option<TracingEndpoint>) {
     init_tracing_with_endpoint_and_level(endpoint, None);
+}
+
+/// Flush any pending traces before shutdown
+/// This is a best-effort function that tries to flush traces if HTTP tracing is enabled
+pub fn flush_traces() {
+    // Add a small delay to allow any pending traces to be processed
+    std::thread::sleep(Duration::from_millis(200));
+    
+    // Log a flush marker that will trigger batch sending
+    tracing::info!("Flushing traces before shutdown");
+    
+    // Additional delay to allow the flush to complete
+    std::thread::sleep(Duration::from_millis(300));
 }
 
 /// Initialize tracing subscriber with process-specific configuration

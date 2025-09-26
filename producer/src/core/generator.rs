@@ -1,6 +1,6 @@
 //! Command generation for test mode simulation
 
-use shared::types::{GenerationConfig, RoutingStrategy};
+use shared::types::{GenerationConfig, RoutingStrategy, ProviderConfig};
 use shared::{ProducerCommand, ProviderId};
 use std::time::{Duration, Instant};
 
@@ -78,7 +78,7 @@ impl CommandGenerator {
     pub fn get_routing_strategy() -> RoutingStrategy {
         RoutingStrategy::from_env().unwrap_or_else(|e| {
             eprintln!("Warning: Failed to load routing strategy from environment: {}. Using default backoff to random.", e);
-            RoutingStrategy::Backoff { provider: ProviderId::Random }
+            RoutingStrategy::Backoff { provider: ProviderConfig::with_default_model(ProviderId::Random) }
         })
     }
 }
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_command_generator_creation() {
-        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderId::Random };
+        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderConfig::with_default_model(ProviderId::Random) };
         let generator = CommandGenerator::new(Some(10), Duration::from_secs(1), routing_strategy);
 
         assert_eq!(generator.get_iteration_count(), 0);
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_command_generator_first_command() {
-        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderId::Random };
+        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderConfig::with_default_model(ProviderId::Random) };
         let mut generator = CommandGenerator::new(Some(10), Duration::from_secs(1), routing_strategy);
 
         let command = generator.next_command("test prompt");
@@ -114,7 +114,11 @@ mod tests {
             assert_eq!(topic, "test_topic");
             assert_eq!(prompt, "test prompt");
             // In test mode, should use backoff strategy with Random provider
-            assert!(matches!(routing_strategy, RoutingStrategy::Backoff { provider: ProviderId::Random }));
+            if let RoutingStrategy::Backoff { provider } = routing_strategy {
+                assert_eq!(provider.provider, ProviderId::Random);
+            } else {
+                panic!("Expected Backoff strategy");
+            }
         } else {
             panic!("Expected Start command");
         }
@@ -124,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_command_generator_max_iterations() {
-        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderId::Random };
+        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderConfig::with_default_model(ProviderId::Random) };
         let mut generator = CommandGenerator::new(Some(1), Duration::from_millis(1), routing_strategy);
 
         // First command should be Start
@@ -141,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_command_generator_interval_throttling() {
-        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderId::Random };
+        let routing_strategy = RoutingStrategy::Backoff { provider: ProviderConfig::with_default_model(ProviderId::Random) };
         let mut generator = CommandGenerator::new(None, Duration::from_secs(1), routing_strategy);
 
         // First command should succeed

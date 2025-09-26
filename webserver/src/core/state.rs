@@ -327,6 +327,7 @@ impl WebServerState {
     }
 
     /// Calculate system health
+    #[allow(dead_code)]
     fn calculate_system_health(&self) -> SystemHealth {
         if !self.orchestrator_connected {
             return SystemHealth::Unhealthy;
@@ -402,6 +403,7 @@ impl WebServerState {
     }
 
     /// Generate optimization insights (placeholder)
+    #[allow(dead_code)]
     fn generate_optimization_insights(&self) -> Vec<OptimizationInsight> {
         // This would use the analytics engine in a real implementation
         vec![]

@@ -1,0 +1,14 @@
+[
+  {
+    "provider_id": "Random",
+    "requests_per_minute": 60.0,
+    "unique_attributes_per_minute": 36000.0,
+    "cost_per_minute": 0.036,
+    "efficiency_ratio": 1.0,
+    "total_requests": 2,
+    "total_unique_attributes": 1618,
+    "total_cost": 0.0016189022747999998,
+    "average_response_time_ms": 0.0,
+    "success_rate": 1.0
+  }
+]

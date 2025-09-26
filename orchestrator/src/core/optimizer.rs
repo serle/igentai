@@ -8,6 +8,8 @@ use super::performance::PerformanceStats;
 use crate::error::OrchestratorResult;
 use shared::{GenerationConfig, OptimizationMode, ProviderId, RoutingStrategy};
 use std::collections::HashMap;
+use std::cmp;
+use std::time::Instant;
 
 /// Optimizer for intelligent prompt generation and routing decisions
 pub struct Optimizer {
@@ -93,7 +95,7 @@ pub struct ExpectedImprovements {
 /// Historical optimization result for learning
 #[derive(Debug, Clone)]
 pub struct OptimizationResult {
-    pub timestamp: std::time::Instant,
+    pub timestamp: Instant,
     pub topic: String,
     pub strategy_used: OptimizationStrategy,
     pub performance_before: PerformanceSnapshot,
@@ -134,6 +136,8 @@ impl Optimizer {
         topic: &str,
         current_performance: &PerformanceStats,
         optimization_mode: &OptimizationMode,
+        topic_routing_strategy: Option<&RoutingStrategy>,
+        orchestrator_default_routing_strategy: Option<&RoutingStrategy>,
     ) -> OrchestratorResult<OptimizationPlan> {
         // Analyze current performance
         let performance_analysis = self.analyze_performance(current_performance);
@@ -145,7 +149,7 @@ impl Optimizer {
         let optimized_prompt = self.generate_optimized_prompt(topic, &partitioning, &performance_analysis)?;
 
         // Determine optimal routing strategy
-        let routing_strategy = self.optimize_routing_strategy(current_performance, optimization_mode)?;
+        let routing_strategy = self.optimize_routing_strategy(current_performance, optimization_mode, topic_routing_strategy, orchestrator_default_routing_strategy)?;
 
         // Generate configuration adjustments
         let generation_config = self.optimize_generation_config(current_performance, optimization_mode)?;
@@ -258,7 +262,8 @@ impl Optimizer {
                 format!(
                     "Generate highly unique and specific attributes for '{topic}'. \
                     Focus on originality, avoid common responses, and ensure each attribute \
-                    is distinctive and measurable. Provide creative and unexpected perspectives."
+                    is distinctive and measurable. Provide creative and unexpected perspectives. \
+                    IMPORTANT: Provide all results in English only, translating any foreign language terms to English."
                 )
             }
 
@@ -266,7 +271,8 @@ impl Optimizer {
                 format!(
                     "Generate unique attributes for '{}' focusing specifically on: {}. \
                     Be creative within your assigned categories, avoid generic responses, \
-                    and ensure high originality in your assigned domains.",
+                    and ensure high originality in your assigned domains. \
+                    IMPORTANT: Provide all results in English only, translating any foreign language terms to English.",
                     topic,
                     categories.join(", ")
                 )
@@ -276,7 +282,8 @@ impl Optimizer {
                 format!(
                     "Generate unique attributes for '{}' of these specific types: {}. \
                     Focus on your assigned attribute types, be highly specific and creative, \
-                    ensure each attribute is unique within your specialization.",
+                    ensure each attribute is unique within your specialization. \
+                    IMPORTANT: Provide all results in English only, translating any foreign language terms to English.",
                     topic,
                     types.join(", ")
                 )
@@ -286,7 +293,8 @@ impl Optimizer {
                 // This will be customized per provider
                 format!(
                     "Generate unique attributes for '{topic}' leveraging your specific capabilities. \
-                    Focus on areas where you excel, ensure maximum creativity and uniqueness."
+                    Focus on areas where you excel, ensure maximum creativity and uniqueness. \
+                    IMPORTANT: Provide all results in English only, translating any foreign language terms to English."
                 )
             }
         };
@@ -304,21 +312,40 @@ impl Optimizer {
         Ok(enhanced_prompt)
     }
 
-    /// Optimize routing strategy based on performance
+    /// Optimize routing strategy based on performance with fallback hierarchy
     fn optimize_routing_strategy(
         &self,
         performance: &PerformanceStats,
         optimization_mode: &OptimizationMode,
+        topic_routing_strategy: Option<&RoutingStrategy>,
+        orchestrator_default_routing_strategy: Option<&RoutingStrategy>,
     ) -> OrchestratorResult<RoutingStrategy> {
+        // Routing strategy fallback hierarchy:
+        // 1. If topic has a specific routing strategy, use it
+        if let Some(topic_strategy) = topic_routing_strategy {
+            tracing::debug!("🎯 Optimizer using topic-level routing strategy: {:?}", topic_strategy);
+            return Ok(topic_strategy.clone());
+        }
+
+        // 2. If orchestrator has a default routing strategy, use it
+        if let Some(orchestrator_strategy) = orchestrator_default_routing_strategy {
+            tracing::debug!("🎯 Optimizer using orchestrator default routing strategy: {:?}", orchestrator_strategy);
+            return Ok(orchestrator_strategy.clone());
+        }
+
+        // 3. Fall back to optimizer's performance-based decision
+        tracing::debug!("🎯 Optimizer making performance-based routing decision");
+
         // Special case: if we only have one provider and no performance data yet, use Backoff strategy
         if performance.by_provider.len() == 1 && performance.overall.uam == 0.0 {
-            let provider = performance
+            let provider_id = performance
                 .by_provider
                 .keys()
                 .next()
                 .copied()
                 .unwrap_or(ProviderId::Random);
-            return Ok(RoutingStrategy::Backoff { provider });
+            let provider_config = shared::types::ProviderConfig::with_default_model(provider_id);
+            return Ok(RoutingStrategy::Backoff { provider: provider_config });
         }
 
         match optimization_mode {
@@ -331,7 +358,10 @@ impl Optimizer {
                     .collect();
                 providers_by_uam.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-                let providers: Vec<ProviderId> = providers_by_uam.into_iter().map(|(id, _)| id).collect();
+                let providers: Vec<shared::types::ProviderConfig> = providers_by_uam
+                    .into_iter()
+                    .map(|(id, _)| shared::types::ProviderConfig::with_default_model(id))
+                    .collect();
                 Ok(RoutingStrategy::PriorityOrder { providers })
             }
 
@@ -343,7 +373,8 @@ impl Optimizer {
                 for (provider_id, metrics) in &performance.by_provider {
                     if total_efficiency > 0.0 {
                         let weight = metrics.unique_per_dollar / total_efficiency;
-                        weights.insert(*provider_id, weight as f32);
+                        let provider_config = shared::types::ProviderConfig::with_default_model(*provider_id);
+                        weights.insert(provider_config, weight as f32);
                     }
                 }
 
@@ -399,15 +430,15 @@ impl Optimizer {
         match optimization_mode {
             OptimizationMode::MinimizeCost { .. } => {
                 // Reduce token usage
-                config.max_tokens = std::cmp::min(config.max_tokens, 500);
+                config.max_tokens = cmp::min(config.max_tokens, 500);
                 config.batch_size = 1;
-                config.request_size = std::cmp::min(config.request_size, 80); // Smaller requests for cost efficiency
+                config.request_size = cmp::min(config.request_size, 80); // Smaller requests for cost efficiency
             }
 
             OptimizationMode::MaximizeUAM { .. } => {
                 // Optimize for generation speed
-                config.batch_size = std::cmp::max(config.batch_size, 2);
-                config.request_size = std::cmp::max(config.request_size, 120); // Larger requests for max UAM
+                config.batch_size = cmp::max(config.batch_size, 2);
+                config.request_size = cmp::max(config.request_size, 120); // Larger requests for max UAM
             }
 
             _ => {} // Use default adjustments
@@ -534,7 +565,8 @@ impl Optimizer {
             let efficiency_score = metrics.unique_per_dollar / 50.0; // Normalize to 0-1
             let combined_score = (uam_score * 0.6) + (efficiency_score * 0.4);
 
-            weights.insert(*provider_id, combined_score as f32);
+            let provider_config = shared::types::ProviderConfig::with_default_model(*provider_id);
+            weights.insert(provider_config, combined_score as f32);
         }
 
         // Normalize weights to sum to 1.0
@@ -561,7 +593,8 @@ impl Optimizer {
             let cost_score = metrics.unique_per_dollar / 50.0;
             let combined_score = (uam_score * uam_weight) + (cost_score * cost_weight);
 
-            weights.insert(*provider_id, combined_score as f32);
+            let provider_config = shared::types::ProviderConfig::with_default_model(*provider_id);
+            weights.insert(provider_config, combined_score as f32);
         }
 
         Ok(RoutingStrategy::Weighted { weights })

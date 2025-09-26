@@ -90,6 +90,9 @@ pub struct OrchestratorState {
 
     /// Pending start commands waiting for producers to be ready
     pending_start_commands: HashMap<ProcessId, OrchestratorCommand>,
+
+    /// Default routing strategy from orchestrator args/env (global fallback)
+    default_routing_strategy: Option<shared::RoutingStrategy>,
 }
 
 /// Current generation task configuration
@@ -145,7 +148,18 @@ impl OrchestratorState {
             previous_unique_count: 0,
             cycle_history: Vec::new(),
             pending_start_commands: HashMap::new(),
+            default_routing_strategy: None,
         }
+    }
+
+    /// Set the default routing strategy from orchestrator args/env
+    pub fn set_default_routing_strategy(&mut self, strategy: Option<shared::RoutingStrategy>) {
+        self.default_routing_strategy = strategy;
+    }
+
+    /// Get the default routing strategy (orchestrator fallback)
+    pub fn get_default_routing_strategy(&self) -> Option<&shared::RoutingStrategy> {
+        self.default_routing_strategy.as_ref()
     }
 
     /// Initialize system for a new topic
@@ -709,7 +723,11 @@ impl Default for GenerationContext {
             topic: None,
             prompt_template: "Generate unique attributes for: {topic}".to_string(),
             routing_strategy: shared::RoutingStrategy::RoundRobin {
-                providers: vec![ProviderId::OpenAI, ProviderId::Anthropic, ProviderId::Gemini],
+                providers: vec![
+                    shared::types::ProviderConfig::with_default_model(ProviderId::OpenAI),
+                    shared::types::ProviderConfig::with_default_model(ProviderId::Anthropic),
+                    shared::types::ProviderConfig::with_default_model(ProviderId::Gemini),
+                ],
             },
             requires_bloom_filter: true,
             optimization_targets: OptimizationTargets {

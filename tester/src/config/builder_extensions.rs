@@ -3,8 +3,7 @@
 //! Extends the existing OrchestratorConfigBuilder with fault tolerance capabilities
 
 use crate::config::fault_tolerance::{FaultScenario, FaultToleranceConfig};
-use crate::config::{OrchestratorConfig, OrchestratorConfigBuilder};
-use std::time::Duration;
+use crate::config::OrchestratorConfigBuilder;
 
 /// Extension trait for adding fault tolerance configuration to the builder
 pub trait FaultToleranceConfigBuilder {

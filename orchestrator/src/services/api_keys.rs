@@ -8,6 +8,7 @@ use crate::traits::ApiKeySource;
 use async_trait::async_trait;
 use shared::{process_debug, ProviderId};
 use std::collections::HashMap;
+use std::env;
 
 /// Real API key source using environment variables
 pub struct RealApiKeySource {
@@ -31,14 +32,14 @@ impl RealApiKeySource {
         let mut keys = HashMap::new();
 
         // OpenAI
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+        if let Ok(key) = env::var("OPENAI_API_KEY") {
             if !key.trim().is_empty() {
                 keys.insert(ProviderId::OpenAI, key.trim().to_string());
             }
         }
 
         // Anthropic
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
             if !key.trim().is_empty() {
                 keys.insert(ProviderId::Anthropic, key.trim().to_string());
             }
@@ -46,7 +47,7 @@ impl RealApiKeySource {
 
         // Google/Gemini
         for env_var in &["GOOGLE_API_KEY", "GEMINI_API_KEY"] {
-            if let Ok(key) = std::env::var(env_var) {
+            if let Ok(key) = env::var(env_var) {
                 if !key.trim().is_empty() {
                     keys.insert(ProviderId::Gemini, key.trim().to_string());
                     break;
@@ -55,7 +56,7 @@ impl RealApiKeySource {
         }
 
         // Random provider (optional - can be set to "dummy" for consistency)
-        if let Ok(key) = std::env::var("RANDOM_API_KEY") {
+        if let Ok(key) = env::var("RANDOM_API_KEY") {
             if !key.trim().is_empty() {
                 keys.insert(ProviderId::Random, key.trim().to_string());
             }
@@ -151,6 +152,17 @@ impl ApiKeySource for RealApiKeySource {
         // Validate keys
         Self::validate_keys(&keys)?;
 
+        // Debug: Show first few characters of each API key to verify correct loading
+        for (provider, key) in &keys {
+            let key_prefix = if key.len() >= 10 { &key[..10] } else { key };
+            process_debug!(
+                shared::ProcessId::current(),
+                "🔑 Loaded API key for {:?}: {}...",
+                provider,
+                key_prefix
+            );
+        }
+        
         process_debug!(
             shared::ProcessId::current(),
             "🔑 Loaded API keys for providers: {:?}",

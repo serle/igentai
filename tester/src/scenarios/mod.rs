@@ -39,6 +39,7 @@ impl TestScenarios {
             "load" => core::load(collector, constellation).await,
             "healing" => core::healing(collector, constellation).await,
             "single_start" => core::single_start_command(collector, constellation).await,
+            "trace_capture" => core::trace_capture(collector, constellation).await,
             "real_api" => core::real_api(collector, constellation).await,
 
             // Web/HTTP interface tests
@@ -99,7 +100,7 @@ impl TestScenarios {
     pub fn available_scenarios() -> Vec<&'static str> {
         vec![
             // Individual tests
-            "basic", "load", "healing", "single_start", "real_api", // Core functionality
+            "basic", "load", "healing", "single_start", "trace_capture", "real_api", // Core functionality
             "server",  // Web interface
             "minimal", "empty", // Edge cases
             // Test suites

@@ -6,12 +6,12 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 use crate::error::{OrchestratorError, OrchestratorResult};
+use crate::services::process_output_handler;
 use crate::traits::{ProcessHealthInfo, ProcessManager, ProcessStatus, ProducerInfo, WebServerInfo};
 use shared::{process_debug, process_error, ProviderId};
 
@@ -133,76 +133,42 @@ impl RealProcessManager {
         if let Some(routing) = routing_strategy {
             let routing_config = match routing {
                 shared::RoutingStrategy::Backoff { provider } => {
-                    let provider_name = match provider {
-                        shared::ProviderId::OpenAI => "openai",
-                        shared::ProviderId::Anthropic => "anthropic", 
-                        shared::ProviderId::Gemini => "gemini",
-                        shared::ProviderId::Random => "random",
-                    };
-                    format!("strategy:backoff,provider:{}", provider_name)
+                    format!("strategy:backoff,provider:{},model:{}", provider.provider, provider.model)
                 },
                 shared::RoutingStrategy::RoundRobin { providers } => {
                     let provider_list = providers.iter()
-                        .map(|p| match p {
-                            shared::ProviderId::OpenAI => "openai",
-                            shared::ProviderId::Anthropic => "anthropic",
-                            shared::ProviderId::Gemini => "gemini",
-                            shared::ProviderId::Random => "random",
-                        })
+                        .map(|pc| format!("{}:{}", pc.provider, pc.model))
                         .collect::<Vec<_>>()
-                        .join("+");
+                        .join(",");
                     format!("strategy:roundrobin,providers:{}", provider_list)
                 },
                 shared::RoutingStrategy::PriorityOrder { providers } => {
                     let provider_list = providers.iter()
-                        .map(|p| match p {
-                            shared::ProviderId::OpenAI => "openai",
-                            shared::ProviderId::Anthropic => "anthropic",
-                            shared::ProviderId::Gemini => "gemini",
-                            shared::ProviderId::Random => "random",
-                        })
+                        .map(|pc| format!("{}:{}", pc.provider, pc.model))
                         .collect::<Vec<_>>()
-                        .join("+");
+                        .join(",");
                     format!("strategy:priority,providers:{}", provider_list)
                 },
                 shared::RoutingStrategy::Weighted { weights } => {
                     let weights_str = weights.iter()
-                        .map(|(provider, weight)| {
-                            let provider_name = match provider {
-                                shared::ProviderId::OpenAI => "openai",
-                                shared::ProviderId::Anthropic => "anthropic",
-                                shared::ProviderId::Gemini => "gemini",
-                                shared::ProviderId::Random => "random",
-                            };
-                            format!("{}:{}", provider_name, weight)
+                        .map(|(provider_config, weight)| {
+                            format!("{}:{}:{}", provider_config.provider, provider_config.model, weight)
                         })
                         .collect::<Vec<_>>()
-                        .join("+");
+                        .join(",");
                     format!("strategy:weighted,weights:{}", weights_str)
                 }
             };
             
             cmd.arg("--routing-config").arg(routing_config);
             
-            // Add default model for now (TODO: make this configurable)
-            let default_model = match routing {
-                shared::RoutingStrategy::Backoff { provider } => match provider {
-                    shared::ProviderId::OpenAI => "gpt-4o-mini",
-                    shared::ProviderId::Anthropic => "claude-3-sonnet",
-                    shared::ProviderId::Gemini => "gemini-pro",
-                    shared::ProviderId::Random => "random",
-                },
-                _ => "gpt-4o-mini", // Default model for multi-provider strategies
-            };
-            cmd.arg("--model").arg(default_model);
+            // Models are now included in routing config, no need for separate --model arg
         } else {
             // Fallback: use test provider if only Random keys available
             if use_test_provider {
-                cmd.arg("--routing-config").arg("strategy:backoff,provider:random");
-                cmd.arg("--model").arg("random");
+                cmd.arg("--routing-config").arg("strategy:backoff,provider:random,model:random");
             } else {
-                cmd.arg("--routing-config").arg("strategy:backoff,provider:openai");
-                cmd.arg("--model").arg("gpt-4o-mini");
+                cmd.arg("--routing-config").arg("strategy:backoff,provider:openai,model:gpt-4o-mini");
             }
         }
 
@@ -217,13 +183,23 @@ impl RealProcessManager {
             cmd.env(env_var, api_key);
         }
 
-        // Configure stdio
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
+        // Configure stdio based on tracing endpoint availability
+        let has_trace_endpoint = self.trace_endpoint.is_some();
+        process_output_handler::configure_child_stdio(
+            &mut cmd, 
+            has_trace_endpoint, 
+            &format!("producer_{}", producer_id)
+        );
 
         // Spawn process
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| OrchestratorError::process(format!("Failed to spawn producer: {e}")))?;
+        
+        // Handle output based on tracing configuration
+        if has_trace_endpoint {
+            child = process_output_handler::spawn_output_consumers(child, format!("producer_{}", producer_id));
+        }
 
         let process_id = child.id().unwrap_or(0);
         let shared_producer_id = shared::ProcessId::Producer(producer_id);
@@ -363,11 +339,18 @@ impl ProcessManager for RealProcessManager {
         // Add log level
         cmd.arg("--log-level").arg(&self.log_level);
 
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
+        // Configure stdio based on tracing endpoint availability
+        let has_trace_endpoint = self.trace_endpoint.is_some();
+        process_output_handler::configure_child_stdio(&mut cmd, has_trace_endpoint, "webserver");
 
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| OrchestratorError::process(format!("Failed to spawn webserver: {e}")))?;
+        
+        // Handle output based on tracing configuration
+        if has_trace_endpoint {
+            child = process_output_handler::spawn_output_consumers(child, "webserver".to_string());
+        }
 
         let process_id = child.id().unwrap_or(0);
 
@@ -539,7 +522,7 @@ mod tests {
         let empty_keys = HashMap::new();
         let addr = "127.0.0.1:6001".parse().unwrap();
 
-        let result = manager.spawn_producers(1, "test", empty_keys, addr).await;
+        let result = manager.spawn_producers(1, "test", empty_keys, addr, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No API keys"));
     }

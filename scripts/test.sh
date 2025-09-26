@@ -7,7 +7,7 @@
 cd "$(dirname "$0")/.."
 
 # Clear any inherited environment variables that might conflict with .env
-unset ROUTING_STRATEGY ROUTING_PRIMARY_PROVIDER ROUTING_PROVIDERS ROUTING_WEIGHTS 2>/dev/null || true
+unset ROUTING_STRATEGY ROUTING_CONFIG 2>/dev/null || true
 
 # Load environment variables from .env file if it exists
 if [ -f ".env" ]; then
@@ -31,7 +31,7 @@ DEFAULT_WORKERS=3
 DEFAULT_ITERATIONS=5
 
 # Parse arguments
-TOPIC=${1:-"test_topic"}
+TOPIC=${1:-"Paris attractions"}
 WORKERS=${2:-$DEFAULT_WORKERS}
 ITERATIONS=${3:-$DEFAULT_ITERATIONS}
 
@@ -109,7 +109,7 @@ start_generation() {
     
     local response=$(curl -s -X POST http://localhost:8080/api/start \
         -H "Content-Type: application/json" \
-        -d "{\"topic\": \"$TOPIC\", \"producer_count\": $WORKERS, \"iterations\": $ITERATIONS}")
+        -d "{\"topic\": \"$TOPIC\", \"producer_count\": $WORKERS, \"iterations\": $ITERATIONS, \"routing_strategy\": \"backoff\", \"routing_config\": \"openai:gpt-4o-mini\"}")
     
     if echo "$response" | grep -q "success"; then
         print_success "Generation started successfully"
@@ -191,11 +191,12 @@ main() {
     print_success "Build complete"
     
     # Start orchestrator
-    print_info "Starting orchestrator with random provider and debug logging..."
-    LOG_FILE="orchestrator_$(date +%Y%m%d_%H%M%S).log"
+    print_info "Starting orchestrator with backoff routing to OpenAI GPT-4o-mini and debug logging..."
+    mkdir -p logs
+    LOG_FILE="logs/orchestrator_$(date +%Y%m%d_%H%M%S).log"
     print_info "Logs will be saved to: $LOG_FILE"
     
-    cargo run --bin orchestrator -- --provider random --log-level debug 2>&1 | tee "$LOG_FILE" &
+    cargo run --bin orchestrator -- --routing-strategy backoff --routing-config "openai:gpt-4o-mini" --log-level debug 2>&1 | tee "$LOG_FILE" &
     ORCHESTRATOR_PID=$!
     
     # Wait for webserver to be ready
@@ -233,6 +234,7 @@ main() {
     echo "Topic: $TOPIC"
     echo "Workers: $WORKERS"
     echo "Iterations: $ITERATIONS"
+    echo "Example: Eiffel Tower, Louvre Museum, Notre-Dame Cathedral..."
     echo "Log file: $LOG_FILE"
     echo "======================================"
     echo

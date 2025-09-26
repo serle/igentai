@@ -55,24 +55,37 @@ export OPENAI_API_KEY="your-key-here"
 
 ### 3. Configure Routing Strategy (Optional)
 
-The system supports multiple routing strategies for load balancing across providers:
+The system supports multiple routing strategies for load balancing across providers with specific models using a unified configuration format:
 
 ```bash
-# Single provider with backoff (default)
+# Single provider with model (default)
 ROUTING_STRATEGY=backoff
-ROUTING_PRIMARY_PROVIDER=openai
+ROUTING_CONFIG=openai:gpt-4o-mini
 
-# Round-robin across multiple providers
+# Round-robin across multiple providers with their models
 ROUTING_STRATEGY=roundrobin
-ROUTING_PROVIDERS=openai,anthropic,gemini
+ROUTING_CONFIG=openai:gpt-4o-mini,anthropic:claude-3-sonnet,gemini:gemini-pro
 
 # Priority order (try cheapest first)
 ROUTING_STRATEGY=priority
-ROUTING_PROVIDERS=gemini,openai,anthropic
+ROUTING_CONFIG=gemini:gemini-pro,openai:gpt-4o-mini,anthropic:claude-3-sonnet
 
-# Weighted distribution
+# Weighted distribution with models and weights
 ROUTING_STRATEGY=weighted
-ROUTING_WEIGHTS=openai:0.5,anthropic:0.3,gemini:0.2
+ROUTING_CONFIG=openai:gpt-4o-mini:0.5,anthropic:claude-3-sonnet:0.3,gemini:gemini-pro:0.2
+```
+
+#### Environment Variables and CLI Arguments
+
+The environment variables align exactly with CLI arguments:
+
+```bash
+# Environment variables
+ROUTING_STRATEGY=roundrobin
+ROUTING_CONFIG=openai:gpt-4o-mini,anthropic:claude-3-sonnet
+
+# Equivalent CLI arguments
+--routing-strategy roundrobin --routing-config "openai:gpt-4o-mini,anthropic:claude-3-sonnet"
 ```
 
 ### 4. Run the System
@@ -97,14 +110,14 @@ Choose between two modes:
 
 ```bash
 # Direct command line usage - no web interface
-cargo run --bin orchestrator -- --topic "Your Topic" --producers 3
+cargo run --bin orchestrator -- --topic "Paris attractions" --producers 3 --routing-strategy backoff --routing-config "openai:gpt-4o-mini"
 
-# With test provider (no API keys needed)
-cargo run --bin orchestrator -- --topic "Test Topic" --provider random --iterations 5
+# With test provider (no API keys needed)  
+cargo run --bin orchestrator -- --topic "Paris attractions" --routing-strategy backoff --routing-config "random:random" --iterations 5
 
 # Build first, then use the binary directly
 ./scripts/build.sh
-./target/release/orchestrator --topic "Paris attractions" --producers 3
+./target/release/orchestrator --topic "Paris attractions" --producers 3 --routing-strategy backoff --routing-config "openai:gpt-4o-mini"
 ```
 
 ## Operating Modes Explained
@@ -137,9 +150,8 @@ Key Options:
   --producers <N>              Number of producer processes (default: 5)
   --iterations <N>             Max iterations per producer (default: unlimited)
   --max-requests <N>           Max requests per producer (overrides iterations)
-  --provider <PROVIDER>        "env" for real APIs, "random" for test data
   --routing-strategy <STRATEGY> Load balancing: backoff, roundrobin, priority, weighted
-  --routing-provider <PROVIDER> Primary provider for routing decisions
+  --routing-config <CONFIG>     Provider:model configuration for routing (e.g., "openai:gpt-4o-mini")
   --output <DIR>               Output directory (default: ./output/<topic>)
   --log-level <LEVEL>          Logging detail: info, debug, trace (default: info)
   --help                       Display all available options with full descriptions
@@ -151,23 +163,23 @@ Key Options:
 
 ```bash
 # Quick test with random provider
-./target/release/orchestrator --topic "Test Topic" --provider random --iterations 3 --producers 2
+./target/release/orchestrator --topic "Paris attractions" --routing-strategy backoff --routing-config "random:random" --iterations 3 --producers 2
 ```
 
 ### Real Generation (Requires API Keys)
 
 ```bash
 # Basic generation with default backoff routing
-./target/release/orchestrator --topic "Renewable Energy" --producers 3
+./target/release/orchestrator --topic "Renewable Energy" --producers 3 --routing-strategy backoff --routing-config "openai:gpt-4o-mini"
 
 # Limited requests for cost control
-./target/release/orchestrator --topic "AI Ethics" --producers 5 --max-requests 50
+./target/release/orchestrator --topic "AI Ethics" --producers 5 --routing-strategy backoff --routing-config "openai:gpt-4o-mini" --max-requests 50
 
-# Custom routing strategy
-./target/release/orchestrator --topic "Space Technology" --routing-strategy roundrobin --routing-provider openai
+# Custom routing strategy with specific models
+./target/release/orchestrator --topic "Space Technology" --routing-strategy roundrobin --routing-config "openai:gpt-4o-mini,anthropic:claude-3-sonnet"
 
-# Multiple providers with priority routing
-./target/release/orchestrator --topic "Climate Change" --routing-strategy priority --max-requests 100
+# Multiple providers with priority routing and weighted distribution
+./target/release/orchestrator --topic "Climate Change" --routing-strategy weighted --routing-config "openai:gpt-4o-mini:0.6,gemini:gemini-pro:0.4" --max-requests 100
 ```
 
 ### Web Mode Usage

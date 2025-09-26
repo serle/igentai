@@ -15,7 +15,7 @@ use tokio::time::interval;
 use uuid::Uuid;
 
 use crate::core::generator::CommandGenerator;
-use crate::core::utils::{build_api_request, select_provider, should_retry_request};
+use crate::core::utils::{build_api_request_with_config, should_retry_request};
 use crate::core::{Metrics, Processor, PromptHandler};
 use crate::error::{ProducerError, ProducerResult};
 use crate::traits::{ApiClient, Communicator};
@@ -79,6 +79,9 @@ where
 
     /// Main unified run loop - same for both test and production modes
     pub async fn run(&mut self) -> ProducerResult<()> {
+        // Test tracing immediately when producer starts running
+        tracing::info!("🧪 Producer run() started - tracing test");
+        
         process_info!(
             ProcessId::current(),
             "🚀 Starting Producer in {:?} mode",
@@ -260,13 +263,17 @@ where
                 ..
             } => {
                 let mut state = self.state.write().await;
-                if let Some(new_prompt) = prompt {
-                    state.current_prompt = Some(new_prompt);
+                if let Some(ref new_prompt) = prompt {
+                    process_debug!(ProcessId::current(), "🔄 Producer updating prompt from '{}' to '{}'", 
+                        state.current_prompt.as_deref().unwrap_or("None"), new_prompt);
+                    state.current_prompt = Some(new_prompt.clone());
                 }
                 if let Some(new_strategy) = routing_strategy {
+                    process_debug!(ProcessId::current(), "🔄 Producer updating routing strategy to: {:?}", new_strategy);
                     state.routing_strategy = Some(new_strategy);
                 }
                 if let Some(new_config) = generation_config {
+                    process_debug!(ProcessId::current(), "🔄 Producer updating generation config");
                     state.generation_config = Some(new_config);
                 }
                 process_info!(ProcessId::current(), "🔄 Updated producer configuration");
@@ -448,19 +455,20 @@ where
         base_prompt: &str,
         config: &ExecutionConfig,
     ) -> ProducerResult<()> {
-        // Build enhanced prompt
-        let provider = select_provider(routing_strategy, ProviderId::Random);
+        // Build enhanced prompt with provider config
+        let fallback_config = shared::types::ProviderConfig::with_default_model(ProviderId::Random);
+        let provider_config = crate::core::utils::select_provider_config(routing_strategy, fallback_config);
         let enhanced_prompt = prompt_handler
-            .build_enhanced_prompt(base_prompt, provider, generation_config.as_ref(), state, processor)
+            .build_enhanced_prompt(base_prompt, provider_config.provider, generation_config.as_ref(), state, processor)
             .await;
 
-        // Create request
-        let request = build_api_request(routing_strategy, generation_config, enhanced_prompt, Uuid::new_v4());
+        // Create request with provider config
+        let request = build_api_request_with_config(&provider_config, generation_config, enhanced_prompt, Uuid::new_v4());
 
         // Record request
         {
             let mut metrics_guard = metrics.write().await;
-            metrics_guard.record_request_sent(provider);
+            metrics_guard.record_request_sent(provider_config.provider);
         }
 
         // Make API call with retries
@@ -472,8 +480,8 @@ where
             metrics_guard.record_response_received(&response);
 
             if response.success {
-                let cost = api_client.estimate_cost(provider, response.tokens_used);
-                metrics_guard.record_cost(provider, cost);
+                let cost = api_client.estimate_cost(provider_config.provider, response.tokens_used);
+                metrics_guard.record_cost(provider_config.provider, cost);
             }
         }
 
@@ -488,7 +496,7 @@ where
                     Self::send_attributes_to_orchestrator(
                         communicator,
                         &processing_stats.new_values,
-                        provider,
+                        provider_config.provider,
                         &response,
                     )
                     .await?;
@@ -684,6 +692,10 @@ where
         }
 
         process_info!(ProcessId::current(), "✅ Functional Producer shutdown complete");
+        
+        // Flush any pending traces before terminating
+        shared::logging::flush_traces();
+        
         Ok(())
     }
 

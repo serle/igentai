@@ -6,7 +6,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::types::{ApiRequest, ApiResponse};
-use shared::types::{GenerationConfig, RoutingStrategy};
+use shared::types::{GenerationConfig, RoutingStrategy, ProviderConfig};
 use shared::ProviderId;
 
 /// Load routing strategy from environment variables with fallback
@@ -14,7 +14,7 @@ use shared::ProviderId;
 pub fn load_routing_strategy() -> RoutingStrategy {
     RoutingStrategy::from_env().unwrap_or_else(|e| {
         eprintln!("Warning: Failed to load routing strategy from environment: {}. Using default backoff to random.", e);
-        RoutingStrategy::Backoff { provider: ProviderId::Random }
+        RoutingStrategy::Backoff { provider: ProviderConfig::with_default_model(ProviderId::Random) }
     })
 }
 
@@ -23,17 +23,32 @@ pub fn select_provider(routing_strategy: &Option<RoutingStrategy>, fallback: Pro
     match routing_strategy {
         Some(RoutingStrategy::RoundRobin { providers }) if !providers.is_empty() => {
             let index = (Utc::now().timestamp_millis() / 1000) as usize % providers.len();
-            providers[index]
+            providers[index].provider
         }
-        Some(RoutingStrategy::Backoff { provider }) => *provider,
-        Some(RoutingStrategy::PriorityOrder { providers }) => providers.first().copied().unwrap_or(fallback),
-        Some(RoutingStrategy::Weighted { weights }) => select_weighted_provider(weights).unwrap_or(fallback),
+        Some(RoutingStrategy::Backoff { provider }) => provider.provider,
+        Some(RoutingStrategy::PriorityOrder { providers }) => providers.first().map(|p| p.provider).unwrap_or(fallback),
+        Some(RoutingStrategy::Weighted { weights }) => select_weighted_provider_config(weights).map(|pc| pc.provider).unwrap_or(fallback),
         Some(RoutingStrategy::RoundRobin { .. }) => fallback, // Empty providers case
         None => fallback,
     }
 }
 
-/// Select provider based on weights (pure function)
+/// Select provider config based on routing strategy (pure function)
+pub fn select_provider_config(routing_strategy: &Option<RoutingStrategy>, fallback: ProviderConfig) -> ProviderConfig {
+    match routing_strategy {
+        Some(RoutingStrategy::RoundRobin { providers }) if !providers.is_empty() => {
+            let index = (Utc::now().timestamp_millis() / 1000) as usize % providers.len();
+            providers[index].clone()
+        }
+        Some(RoutingStrategy::Backoff { provider }) => provider.clone(),
+        Some(RoutingStrategy::PriorityOrder { providers }) => providers.first().cloned().unwrap_or(fallback),
+        Some(RoutingStrategy::Weighted { weights }) => select_weighted_provider_config(weights).unwrap_or(fallback),
+        Some(RoutingStrategy::RoundRobin { .. }) => fallback, // Empty providers case
+        None => fallback,
+    }
+}
+
+/// Select provider based on weights (pure function) - legacy support
 pub fn select_weighted_provider(weights: &HashMap<ProviderId, f32>) -> Option<ProviderId> {
     let total_weight: f32 = weights.values().sum();
     if total_weight == 0.0 {
@@ -53,7 +68,49 @@ pub fn select_weighted_provider(weights: &HashMap<ProviderId, f32>) -> Option<Pr
     None
 }
 
-/// Build API request from routing strategy and generation config (pure function)
+/// Select provider config based on weights (pure function)
+pub fn select_weighted_provider_config(weights: &HashMap<ProviderConfig, f32>) -> Option<ProviderConfig> {
+    let total_weight: f32 = weights.values().sum();
+    if total_weight == 0.0 {
+        return None;
+    }
+
+    let random_value = (Utc::now().timestamp_millis() % 1000) as f32;
+    let target = random_value % total_weight;
+
+    let mut accumulated = 0.0;
+    for (provider_config, weight) in weights {
+        accumulated += weight;
+        if target < accumulated {
+            return Some(provider_config.clone());
+        }
+    }
+    None
+}
+
+/// Build API request from provider config and generation config (pure function)
+pub fn build_api_request_with_config(
+    provider_config: &ProviderConfig,
+    generation_config: &Option<GenerationConfig>,
+    enhanced_prompt: String,
+    request_id: Uuid,
+) -> ApiRequest {
+    let (max_tokens, temperature) = generation_config
+        .as_ref()
+        .map(|gc| (gc.max_tokens, gc.temperature))
+        .unwrap_or((150, 0.7));
+
+    ApiRequest {
+        provider: provider_config.provider,
+        prompt: enhanced_prompt,
+        max_tokens,
+        temperature,
+        request_id,
+        timestamp: Utc::now(),
+    }
+}
+
+/// Build API request from routing strategy and generation config (pure function) - legacy support
 pub fn build_api_request(
     routing_strategy: &Option<RoutingStrategy>,
     generation_config: &Option<GenerationConfig>,
@@ -101,7 +158,7 @@ mod tests {
     fn test_select_provider_strategies() {
         // Test backoff strategy
         let backoff_strategy = Some(RoutingStrategy::Backoff {
-            provider: ProviderId::Anthropic,
+            provider: ProviderConfig::with_default_model(ProviderId::Anthropic),
         });
         assert_eq!(
             select_provider(&backoff_strategy, ProviderId::OpenAI),
@@ -110,7 +167,10 @@ mod tests {
 
         // Test round robin strategy
         let round_robin_strategy = Some(RoutingStrategy::RoundRobin {
-            providers: vec![ProviderId::Gemini, ProviderId::OpenAI],
+            providers: vec![
+                ProviderConfig::with_default_model(ProviderId::Gemini),
+                ProviderConfig::with_default_model(ProviderId::OpenAI),
+            ],
         });
         let selected = select_provider(&round_robin_strategy, ProviderId::Random);
         assert!(selected == ProviderId::Gemini || selected == ProviderId::OpenAI);
@@ -152,7 +212,7 @@ mod tests {
         match strategy {
             RoutingStrategy::Backoff { provider } => {
                 // In test mode, should use Random provider regardless of environment
-                assert_eq!(provider, ProviderId::Random);
+                assert_eq!(provider.provider, ProviderId::Random);
             }
             _ => panic!("Expected backoff strategy in test mode"),
         }

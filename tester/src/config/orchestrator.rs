@@ -35,7 +35,7 @@ pub struct OrchestratorConfig {
     pub max_duration: Duration,
     pub fault_tolerance: Option<FaultToleranceConfig>,
     pub routing_strategy: Option<String>,
-    pub routing_provider: Option<String>,
+    pub routing_config: Option<String>,
 }
 
 impl Default for OrchestratorConfig {
@@ -55,7 +55,7 @@ impl Default for OrchestratorConfig {
             max_duration: Duration::from_secs(60), // Default 1 minute timeout
             fault_tolerance: None,
             routing_strategy: None,
-            routing_provider: None,
+            routing_config: None,
         }
     }
 }
@@ -70,8 +70,6 @@ impl OrchestratorConfig {
     pub fn to_args(&self) -> Vec<String> {
         let mut args = Vec::new();
 
-        args.push("--provider".to_string());
-        args.push(self.provider.clone());
 
         if let Some(ref endpoint) = self.trace_endpoint {
             args.push("--trace-ep".to_string());
@@ -111,9 +109,9 @@ impl OrchestratorConfig {
             args.push(strategy.clone());
         }
 
-        if let Some(ref provider) = self.routing_provider {
-            args.push("--routing-provider".to_string());
-            args.push(provider.clone());
+        if let Some(ref config) = self.routing_config {
+            args.push("--routing-config".to_string());
+            args.push(config.clone());
         }
 
         // Add mode-specific arguments

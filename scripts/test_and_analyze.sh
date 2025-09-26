@@ -6,7 +6,7 @@
 set -e  # Exit on any error
 
 # Configuration
-TOPIC="${1:-test topic}"
+TOPIC="${1:-Paris attractions}"
 PRODUCER_COUNT="${2:-3}"
 DURATION="${3:-20}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -21,6 +21,8 @@ echo "📝 Configuration:"
 echo "   - Topic: $TOPIC"
 echo "   - Producers: $PRODUCER_COUNT"
 echo "   - Test Duration: ${DURATION}s"
+echo "   - Routing: backoff strategy with openai:gpt-4o-mini"
+echo "   - Expected: Eiffel Tower, Arc de Triomphe, Sacré-Cœur..."
 echo "   - Debug Log: $DEBUG_LOG"
 echo "   - Analysis Log: $ANALYSIS_LOG"
 echo ""
@@ -49,7 +51,8 @@ sleep 1
 
 # Start orchestrator with debug output to file
 echo "🚀 Starting orchestrator with debug logging..."
-cargo run --bin orchestrator -- --log-level debug > "$DEBUG_LOG" 2>&1 &
+echo "   Using backoff routing strategy with OpenAI GPT-4o-mini"
+cargo run --bin orchestrator -- --routing-strategy backoff --routing-config "openai:gpt-4o-mini" --log-level debug > "$DEBUG_LOG" 2>&1 &
 ORCHESTRATOR_PID=$!
 
 # Wait for system to be ready
@@ -76,7 +79,7 @@ echo "🎯 Starting topic generation..."
 START_TIME=$(date +%s)
 RESPONSE=$(curl -s -X POST http://localhost:8080/api/start \
     -H "Content-Type: application/json" \
-    -d "{\"topic\": \"$TOPIC\", \"producer_count\": $PRODUCER_COUNT}")
+    -d "{\"topic\": \"$TOPIC\", \"producer_count\": $PRODUCER_COUNT, \"routing_strategy\": \"backoff\", \"routing_config\": \"openai:gpt-4o-mini\"}")
 
 if [[ $RESPONSE == *"success"* ]]; then
     echo "✅ Topic started successfully: $RESPONSE"

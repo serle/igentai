@@ -3,7 +3,6 @@
 //! Extends the existing OrchestratorConfig with fault injection and healing test capabilities
 
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 /// Fault injection scenarios for testing system resilience
 #[derive(Debug, Clone, Serialize, Deserialize)]

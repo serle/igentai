@@ -5,6 +5,7 @@
 
 use clap::Parser;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tokio::signal;
 
 use orchestrator::{
@@ -38,10 +39,6 @@ pub struct Args {
     #[arg(long)]
     pub iterations: Option<u32>,
 
-    /// CLI mode: Provider selection (random uses Random provider, env uses environment API keys)
-    #[arg(long, default_value = "env")]
-    pub provider: String,
-
     /// CLI mode: Request size (number of items to request per API call)
     #[arg(long, default_value = "60")]
     pub request_size: usize,
@@ -50,13 +47,13 @@ pub struct Args {
     #[arg(long)]
     pub output: Option<String>,
 
-    /// Routing strategy for load balancing (backoff, roundrobin, priority, weighted)
+    /// Routing strategy type (backoff, roundrobin, priority, weighted)
     #[arg(long)]
     pub routing_strategy: Option<String>,
 
-    /// Routing provider for load balancing decisions (openai, random, etc.)
+    /// Strategy-specific routing configuration (e.g., "openai" for backoff, "openai+anthropic" for roundrobin, "openai:0.7+anthropic:0.3" for weighted)
     #[arg(long)]
-    pub routing_provider: Option<String>,
+    pub routing_config: Option<String>,
 
     /// Webserver bind address
     #[arg(long)]
@@ -74,7 +71,8 @@ async fn main() -> OrchestratorResult<()> {
 
     // Determine operating mode
     let cli_mode = args.topic.is_some();
-    let use_only_random = args.provider == "random";
+    // Check if using random provider (legacy check for test mode)
+    let use_only_random = args.routing_config.as_ref().map_or(false, |c| c == "random");
 
     // Initialize process ID singleton for orchestrator
     ProcessId::init_orchestrator();
@@ -102,12 +100,9 @@ async fn main() -> OrchestratorResult<()> {
         );
         process_debug!(
             ProcessId::current(),
-            "Provider: {}, Request Size: {}, Output: {}",
-            if use_only_random {
-                "random (Random)"
-            } else {
-                "env (API keys)"
-            },
+            "Routing: {:?} + {:?}, Request Size: {}, Output: {}",
+            args.routing_strategy.as_deref().unwrap_or("default"),
+            args.routing_config.as_deref().unwrap_or("default"),
             args.request_size,
             output_dir
         );
@@ -132,7 +127,7 @@ async fn main() -> OrchestratorResult<()> {
     // Configure output directory
     let file_system = if cli_mode {
         let output_dir = args.output.clone().unwrap_or_else(|| "./output".to_string());
-        RealFileSystem::with_base_dir(std::path::PathBuf::from(output_dir))
+        RealFileSystem::with_base_dir(PathBuf::from(output_dir))
     } else {
         RealFileSystem::new()
     };
@@ -162,15 +157,23 @@ async fn main() -> OrchestratorResult<()> {
     if cli_mode {
         // CLI mode: Initialize without webserver
         orchestrator.initialize_cli_mode(producer_addr).await?;
+        
+        // Set default routing strategy from args (convert new format to legacy for now)
+        let legacy_provider = args.routing_config.as_ref().map(|c| c.clone());
+        orchestrator.set_default_routing_strategy(args.routing_strategy.clone(), legacy_provider).await?;
 
         // Start generation immediately with provided topic
         let topic = args.topic.unwrap();
         orchestrator
-            .start_cli_generation(topic, args.producers, args.iterations, args.request_size, args.routing_strategy, args.routing_provider)
+            .start_cli_generation(topic, args.producers, args.iterations, args.request_size, args.routing_strategy, args.routing_config)
             .await?;
     } else {
         // WebServer mode: Initialize with webserver
         orchestrator.initialize(webserver_addr, producer_addr).await?;
+        
+        // Set default routing strategy from args/env (convert new format to legacy for now)
+        let legacy_provider = args.routing_config.as_ref().map(|c| c.clone());
+        orchestrator.set_default_routing_strategy(args.routing_strategy, legacy_provider).await?;
     }
 
     // Set up graceful shutdown

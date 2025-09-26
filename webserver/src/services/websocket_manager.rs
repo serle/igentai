@@ -42,6 +42,7 @@ impl RealWebSocketManager {
     }
 
     /// Clean up disconnected clients   
+    #[allow(dead_code)]
     async fn cleanup_disconnected_clients(&self) {
         let mut clients = self.clients.write().await;
         let mut to_remove = Vec::new();

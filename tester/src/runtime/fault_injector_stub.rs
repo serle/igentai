@@ -3,7 +3,6 @@
 //! Simple stub for development - doesn't actually inject faults
 
 use crate::config::fault_tolerance::FaultScenario;
-use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct FaultInjector {

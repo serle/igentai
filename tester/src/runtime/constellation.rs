@@ -45,6 +45,11 @@ impl ServiceConstellation {
         
         // Set the current directory to project root to ensure .env file is loaded
         cmd.current_dir(".");
+        
+        // Inherit stdio to ensure child process output is visible
+        cmd.stdout(std::process::Stdio::inherit())
+           .stderr(std::process::Stdio::inherit())
+           .stdin(std::process::Stdio::null());
 
         let child = cmd.spawn()?;
         self.orchestrator = Some(child);

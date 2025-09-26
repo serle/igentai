@@ -59,6 +59,8 @@ pub struct StartRequest {
     pub topic: String,
     pub producer_count: u32,
     pub iterations: Option<u32>,
+    pub routing_strategy: Option<String>,
+    pub routing_config: Option<String>,
 }
 
 /// Start generation endpoint - /api/start
@@ -85,6 +87,8 @@ where
         optimization_mode,
         constraints,
         iterations: request.iterations,
+        routing_strategy: request.routing_strategy,
+        routing_config: request.routing_config,
     };
 
     let client = orchestrator_client.lock().await;

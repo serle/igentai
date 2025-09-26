@@ -3297,6 +3297,13 @@ impl RealApiClient {
 
     /// Build request body for provider
     fn build_request_body(&self, provider: ProviderId, request: &ApiRequest) -> Value {
+        process_debug!(
+            ProcessId::current(),
+            "🔧 Building API request body for {:?} with prompt: '{}'",
+            provider,
+            request.prompt
+        );
+        
         match provider {
             ProviderId::OpenAI => json!({
                 "model": self.get_model(provider),  // Load from environment
@@ -3437,7 +3444,8 @@ impl ApiClient for RealApiClient {
 
         process_debug!(
             ProcessId::current(),
-            "Sending request to {:?} provider",
+            "🎯 API Client received request with prompt: '{}' for provider {:?}",
+            request.prompt,
             request.provider
         );
 
@@ -3462,10 +3470,19 @@ impl ApiClient for RealApiClient {
             self.client.post(&url)
         };
 
-        debug!("🌐 Making HTTP POST to: {}", url);
+        process_debug!(
+            ProcessId::current(),
+            "🌐 Making HTTP POST to: {} with prompt in body",
+            url
+        );
+        process_debug!(
+            ProcessId::current(),
+            "📄 Request body contains prompt: '{}'",
+            request.prompt
+        );
         debug!("📋 Request headers: [REDACTED - contains API keys]");
         debug!(
-            "📄 Request body: {}",
+            "📄 Full request body: {}",
             serde_json::to_string_pretty(&body).unwrap_or_default()
         );
 

@@ -17,6 +17,8 @@ pub struct StartRequest {
     pub topic: String,
     pub producer_count: u32,
     pub iterations: Option<u32>,
+    pub routing_strategy: Option<String>,
+    pub routing_config: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]

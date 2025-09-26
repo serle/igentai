@@ -15,7 +15,7 @@ use std::time::Duration;
 #[derive(Debug)]
 pub struct Topic {
     name: String,
-    collector: TracingCollector,
+    _collector: TracingCollector,
     assertions: TracingAssertions,
     trace_events: Vec<CollectedEvent>,
     output_data: Option<OutputData>,
@@ -64,7 +64,7 @@ impl Topic {
 
         Some(Topic {
             name: topic_name.to_string(),
-            collector,
+            _collector: collector,
             assertions,
             trace_events,
             output_data,
@@ -113,7 +113,7 @@ impl Topic {
 
                     return Some(Topic {
                         name: topic_name.to_string(),
-                        collector,
+                        _collector: collector,
                         assertions,
                         trace_events,
                         output_data,

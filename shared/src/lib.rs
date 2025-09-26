@@ -17,5 +17,5 @@ pub use types::{
 // Re-export message types
 pub use messages::{
     producer::{OrchestratorCommand, ProducerCommand, ProducerResponse, ProducerUpdate},
-    webserver::{OrchestratorUpdate, TaskRequest, TaskUpdate, WebServerRequest},
+    webserver::{OrchestratorUpdate, WebServerRequest},
 };

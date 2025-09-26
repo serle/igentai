@@ -17,12 +17,14 @@ echo "=============================================="
 echo ""
 
 # Configuration
-TOPIC="${1:-test topic}"
+TOPIC="${1:-Paris attractions}"
 PRODUCER_COUNT="${2:-3}"
 
 echo -e "${YELLOW}📝 Configuration:${NC}"
 echo "   - Topic: $TOPIC"
 echo "   - Producers: $PRODUCER_COUNT"
+echo "   - Routing: backoff strategy with openai:gpt-4o-mini"
+echo "   - Expected: Notre-Dame, Montmartre, Seine River..."
 echo ""
 
 # Change to project root
@@ -39,12 +41,12 @@ sleep 1
 # Note: trace_collector.log is not created unless tracing endpoint is configured
 # This script only uses console debug logging, not file-based trace collection
 
-echo -e "${GREEN}🚀 Starting orchestrator with debug logging...${NC}"
+echo -e "${GREEN}🚀 Starting orchestrator with debug logging and OpenAI routing...${NC}"
 echo "=============================================="
 echo ""
 
 # Start orchestrator in background but capture output
-cargo run --bin orchestrator -- --log-level debug 2>&1 &
+cargo run --bin orchestrator -- --routing-strategy backoff --routing-config "openai:gpt-4o-mini" --log-level debug 2>&1 &
 ORCHESTRATOR_PID=$!
 
 echo "Orchestrator PID: $ORCHESTRATOR_PID"
@@ -68,7 +70,7 @@ echo ""
 echo -e "${YELLOW}🎯 Starting topic generation...${NC}"
 RESPONSE=$(curl -s -X POST http://localhost:8080/api/start \
     -H "Content-Type: application/json" \
-    -d "{\"topic\": \"$TOPIC\", \"producer_count\": $PRODUCER_COUNT}")
+    -d "{\"topic\": \"$TOPIC\", \"producer_count\": $PRODUCER_COUNT, \"routing_strategy\": \"backoff\", \"routing_config\": \"openai:gpt-4o-mini\"}")
 
 echo "API Response: $RESPONSE"
 echo ""

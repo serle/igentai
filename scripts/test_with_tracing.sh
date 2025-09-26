@@ -10,7 +10,7 @@ echo "=================================================="
 echo ""
 
 # Configuration
-TOPIC="${1:-test topic}"
+TOPIC="${1:-Paris attractions}"
 PRODUCER_COUNT="${2:-3}"
 LOG_DIR="logs"
 LOG_FILE="$LOG_DIR/test_debug_$(date +%Y%m%d_%H%M%S).log"
@@ -21,7 +21,8 @@ TRACE_ENDPOINT="http://127.0.0.1:8081"
 
 echo "📝 Configuration:"
 echo "   - Topic: $TOPIC"
-echo "   - Producers: $PRODUCER_COUNT"  
+echo "   - Producers: $PRODUCER_COUNT"
+echo "   - Expected: Eiffel Tower, Louvre, Champs-Élysées..."  
 echo "   - Log file: $LOG_FILE"
 echo "   - Trace endpoint: $TRACE_ENDPOINT"
 echo "   - Trace log: $TRACE_LOG"
@@ -31,7 +32,7 @@ echo ""
 cd "$(dirname "$0")/.."
 
 # Clear any inherited environment variables that might conflict with .env
-unset ROUTING_STRATEGY ROUTING_PRIMARY_PROVIDER ROUTING_PROVIDERS ROUTING_WEIGHTS 2>/dev/null || true
+unset ROUTING_STRATEGY ROUTING_CONFIG 2>/dev/null || true
 
 # Load environment variables from .env file if it exists
 if [ -f ".env" ]; then
@@ -52,7 +53,10 @@ sleep 1
 
 # Start a simple HTTP server to collect traces (mock collector)
 echo "🗃️  Starting trace collector on port 8081..."
-(while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK" | nc -l 8081; done) &
+(while true; do 
+    echo -e "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK" | nc -l 8081
+    sleep 0.1  # Brief pause to allow the next connection
+done) &
 TRACE_COLLECTOR_PID=$!
 
 # Create trace log file for the collector to write to
@@ -89,17 +93,17 @@ done
 echo " Ready!"
 
 echo ""
-echo "🎯 Starting topic generation..."
+echo "🎯 Starting topic generation with routing strategy..."
 RESPONSE=$(curl -s -X POST \
   "http://localhost:8080/api/start" \
   -H "Content-Type: application/json" \
-  -d "{\"topic\": \"$TOPIC\", \"producer_count\": $PRODUCER_COUNT, \"iterations\": 3}")
+  -d "{\"topic\": \"$TOPIC\", \"producer_count\": $PRODUCER_COUNT, \"iterations\": 1, \"routing_strategy\": \"backoff\", \"routing_config\": \"openai:gpt-4o-mini\"}")
 
 echo "📡 API Response: $RESPONSE"
 
 echo ""
-echo "⏱️  Letting producers run for 15 seconds..."
-sleep 15
+echo "⏱️  Letting producers run for 8 seconds..."
+sleep 8
 
 echo ""
 echo "🛑 Stopping system..."
@@ -123,6 +127,7 @@ echo ""
 echo "📁 Debug log saved to: $LOG_FILE"
 echo "📁 Trace log saved to: $TRACE_LOG"
 echo "📊 Trace collection was enabled with endpoint: $TRACE_ENDPOINT"
+echo "🗺️ Used routing strategy: backoff with config: openai:gpt-4o-mini"
 echo ""
 echo "💡 This script shows how to properly enable trace collection when needed"
 echo "💡 The trace_collector.log file is only created when traces are actually collected"

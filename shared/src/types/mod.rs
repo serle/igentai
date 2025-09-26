@@ -180,20 +180,46 @@ pub struct GenerationConstraints {
     pub max_runtime_seconds: Option<u64>,
 }
 
+/// Provider configuration with model
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ProviderConfig {
+    pub provider: ProviderId,
+    pub model: String,
+}
+
+impl ProviderConfig {
+    pub fn new(provider: ProviderId, model: impl Into<String>) -> Self {
+        Self {
+            provider,
+            model: model.into(),
+        }
+    }
+    
+    pub fn with_default_model(provider: ProviderId) -> Self {
+        let model = match provider {
+            ProviderId::OpenAI => "gpt-4o-mini",
+            ProviderId::Anthropic => "claude-3-sonnet",
+            ProviderId::Gemini => "gemini-pro",
+            ProviderId::Random => "random",
+        };
+        Self::new(provider, model)
+    }
+}
+
 /// Routing strategy for distributing work to providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RoutingStrategy {
-    /// Round-robin through providers
-    RoundRobin { providers: Vec<ProviderId> },
+    /// Round-robin through providers with their models
+    RoundRobin { providers: Vec<ProviderConfig> },
 
-    /// Priority order (try first, then fallback)
-    PriorityOrder { providers: Vec<ProviderId> },
+    /// Priority order (try first, then fallback) with models
+    PriorityOrder { providers: Vec<ProviderConfig> },
 
-    /// Weighted distribution
-    Weighted { weights: HashMap<ProviderId, f32> },
+    /// Weighted distribution with models
+    Weighted { weights: HashMap<ProviderConfig, f32> },
 
     /// Single provider with exponential backoff (ideal for test mode)
-    Backoff { provider: ProviderId },
+    Backoff { provider: ProviderConfig },
 }
 
 impl RoutingStrategy {
@@ -201,44 +227,42 @@ impl RoutingStrategy {
     /// 
     /// Environment variables:
     /// - ROUTING_STRATEGY: roundrobin|priority|weighted|backoff (default: fallback to backoff/random)
-    /// - ROUTING_PRIMARY_PROVIDER: Provider for backoff strategy (default: random)
-    /// - ROUTING_PROVIDERS: Comma-separated provider list for roundrobin/priority
-    /// - ROUTING_WEIGHTS: Provider weights for weighted strategy (format: "openai:0.5,anthropic:0.3")
+    /// - ROUTING_CONFIG: Provider configuration string (format: "provider:model" or "provider1:model1,provider2:model2")
     pub fn from_env() -> Result<Self, String> {
         use std::env;
         
         // If no routing strategy is set, fallback to backoff with random (test mode)
         let strategy_type = match env::var("ROUTING_STRATEGY") {
             Ok(strategy) => strategy.to_lowercase(),
-            Err(_) => return Ok(Self::Backoff { provider: ProviderId::Random }),
+            Err(_) => return Ok(Self::Backoff { provider: ProviderConfig { provider: ProviderId::Random, model: "random".to_string() } }),
         };
+        
+        let routing_config = env::var("ROUTING_CONFIG")
+            .unwrap_or_else(|_| "random:random".to_string());
         
         match strategy_type.as_str() {
             "backoff" => {
-                let provider_str = env::var("ROUTING_PRIMARY_PROVIDER")
-                    .unwrap_or_else(|_| "random".to_string());
-                let provider = provider_str.parse()
-                    .map_err(|e| format!("Invalid ROUTING_PRIMARY_PROVIDER '{}': {}", provider_str, e))?;
-                Ok(Self::Backoff { provider })
+                let provider_config = Self::parse_provider_config(&routing_config)?;
+                Ok(Self::Backoff { provider: provider_config })
             }
             "roundrobin" => {
-                let providers = Self::parse_providers()?;
+                let providers = Self::parse_provider_config_list(&routing_config)?;
                 if providers.is_empty() {
-                    return Err("ROUTING_PROVIDERS must be specified for roundrobin strategy".to_string());
+                    return Err("ROUTING_CONFIG must specify providers for roundrobin strategy".to_string());
                 }
                 Ok(Self::RoundRobin { providers })
             }
             "priority" => {
-                let providers = Self::parse_providers()?;
+                let providers = Self::parse_provider_config_list(&routing_config)?;
                 if providers.is_empty() {
-                    return Err("ROUTING_PROVIDERS must be specified for priority strategy".to_string());
+                    return Err("ROUTING_CONFIG must specify providers for priority strategy".to_string());
                 }
                 Ok(Self::PriorityOrder { providers })
             }
             "weighted" => {
-                let weights = Self::parse_weights()?;
+                let weights = Self::parse_weighted_provider_config(&routing_config)?;
                 if weights.is_empty() {
-                    return Err("ROUTING_WEIGHTS must be specified for weighted strategy".to_string());
+                    return Err("ROUTING_CONFIG must specify weighted providers for weighted strategy".to_string());
                 }
                 Ok(Self::Weighted { weights })
             }
@@ -246,44 +270,50 @@ impl RoutingStrategy {
         }
     }
     
-    /// Parse comma-separated provider list from ROUTING_PROVIDERS
-    fn parse_providers() -> Result<Vec<ProviderId>, String> {
-        use std::env;
+    /// Parse single provider config from format "provider:model"
+    fn parse_provider_config(config: &str) -> Result<ProviderConfig, String> {
+        let parts: Vec<&str> = config.split(':').collect();
+        if parts.len() != 2 {
+            return Err(format!("Invalid provider config format '{}'. Expected 'provider:model'", config));
+        }
         
-        let providers_str = env::var("ROUTING_PROVIDERS")
-            .map_err(|_| "ROUTING_PROVIDERS environment variable not set".to_string())?;
+        let provider: ProviderId = parts[0].trim().parse()
+            .map_err(|e| format!("Invalid provider '{}': {}", parts[0], e))?;
+        let model = parts[1].trim().to_string();
         
-        providers_str
-            .split(',')
-            .map(|s| s.trim().parse())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Invalid provider in ROUTING_PROVIDERS: {}", e))
+        Ok(ProviderConfig { provider, model })
     }
     
-    /// Parse provider weights from ROUTING_WEIGHTS (format: "provider1:weight1,provider2:weight2")
-    fn parse_weights() -> Result<HashMap<ProviderId, f32>, String> {
-        use std::env;
-        
-        let weights_str = env::var("ROUTING_WEIGHTS")
-            .map_err(|_| "ROUTING_WEIGHTS environment variable not set".to_string())?;
-        
+    /// Parse comma-separated provider config list from format "provider1:model1,provider2:model2"
+    fn parse_provider_config_list(config: &str) -> Result<Vec<ProviderConfig>, String> {
+        config
+            .split(',')
+            .map(|item| Self::parse_provider_config(item.trim()))
+            .collect()
+    }
+    
+    /// Parse weighted provider config from format "provider1:model1:weight1,provider2:model2:weight2"
+    fn parse_weighted_provider_config(config: &str) -> Result<HashMap<ProviderConfig, f32>, String> {
         let mut weights = HashMap::new();
-        for pair in weights_str.split(',') {
-            let parts: Vec<&str> = pair.split(':').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid weight format '{}'. Expected 'provider:weight'", pair));
+        
+        for item in config.split(',') {
+            let parts: Vec<&str> = item.split(':').collect();
+            if parts.len() != 3 {
+                return Err(format!("Invalid weighted config format '{}'. Expected 'provider:model:weight'", item));
             }
             
             let provider: ProviderId = parts[0].trim().parse()
                 .map_err(|e| format!("Invalid provider '{}': {}", parts[0], e))?;
-            let weight: f32 = parts[1].trim().parse()
-                .map_err(|e| format!("Invalid weight '{}': {}", parts[1], e))?;
+            let model = parts[1].trim().to_string();
+            let weight: f32 = parts[2].trim().parse()
+                .map_err(|e| format!("Invalid weight '{}': {}", parts[2], e))?;
             
             if weight < 0.0 || weight > 1.0 {
                 return Err(format!("Weight {} must be between 0.0 and 1.0", weight));
             }
             
-            weights.insert(provider, weight);
+            let provider_config = ProviderConfig { provider, model };
+            weights.insert(provider_config, weight);
         }
         
         // Validate weights sum to approximately 1.0
@@ -294,6 +324,7 @@ impl RoutingStrategy {
         
         Ok(weights)
     }
+    
 }
 
 /// Generation configuration for providers

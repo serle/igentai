@@ -9,7 +9,7 @@ set -e  # Exit on any error
 cd "$(dirname "$0")/.."
 
 # Clear any inherited environment variables that might conflict with .env
-unset ROUTING_STRATEGY ROUTING_PRIMARY_PROVIDER ROUTING_PROVIDERS ROUTING_WEIGHTS 2>/dev/null || true
+unset ROUTING_STRATEGY ROUTING_CONFIG 2>/dev/null || true
 
 # Load environment variables from .env file if it exists
 if [ -f ".env" ]; then
@@ -34,7 +34,7 @@ echo "✅ Cleanup complete"
 echo "🚀 Starting orchestrator..."
 echo "   Web interface will be available at: http://localhost:8080"
 echo "   Routing Strategy: ${ROUTING_STRATEGY:-backoff}"
-echo "   Primary Provider: ${ROUTING_PRIMARY_PROVIDER:-openai}"
+echo "   Routing Config: ${ROUTING_CONFIG:-openai:gpt-4o-mini}"
 echo "   Use --log-level debug for verbose output"
 echo "   Press Ctrl+C to stop"
 echo ""
@@ -46,5 +46,5 @@ if [ -z "$OPENAI_API_KEY" ]; then
     echo ""
 fi
 
-# Start the orchestrator with env provider (uses OpenAI if API key is available) and any passed arguments
-cargo run --bin orchestrator -- --provider env "$@"
+# Start the orchestrator with routing strategy and config from environment variables or defaults
+cargo run --bin orchestrator -- --routing-strategy "${ROUTING_STRATEGY:-backoff}" --routing-config "${ROUTING_CONFIG:-openai:gpt-4o-mini}" "$@"

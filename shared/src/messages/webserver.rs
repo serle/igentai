@@ -3,10 +3,6 @@
 use crate::types::{GenerationConstraints, OptimizationMode, SystemMetrics};
 use serde::{Deserialize, Serialize};
 
-/// Legacy alias for compatibility
-pub type TaskRequest = WebServerRequest;
-/// Legacy alias for compatibility  
-pub type TaskUpdate = OrchestratorUpdate;
 
 /// Messages sent from WebServer to Orchestrator
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +15,8 @@ pub enum WebServerRequest {
         optimization_mode: OptimizationMode,
         constraints: GenerationConstraints,
         iterations: Option<u32>,
+        routing_strategy: Option<String>,
+        routing_config: Option<String>,
     },
 
     /// Stop current generation

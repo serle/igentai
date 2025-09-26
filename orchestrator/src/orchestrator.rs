@@ -3,6 +3,7 @@
 //! This is the primary orchestrator that coordinates between webserver, producers,
 //! and manages the overall system state using dependency injection.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -42,10 +43,10 @@ where
     producer_rx: Option<mpsc::Receiver<ProducerUpdate>>,
 
     /// Producer communication address (for spawning producers)
-    producer_addr: Option<std::net::SocketAddr>,
+    producer_addr: Option<SocketAddr>,
 
     /// WebServer communication address (for spawning webserver)
-    webserver_addr: Option<std::net::SocketAddr>,
+    webserver_addr: Option<SocketAddr>,
 
     /// Shutdown signal
     shutdown_tx: mpsc::Sender<()>,
@@ -82,8 +83,8 @@ where
     /// Initialize the orchestrator and start listening for messages
     pub async fn initialize(
         &mut self,
-        webserver_bind_addr: std::net::SocketAddr,
-        producer_bind_addr: std::net::SocketAddr,
+        webserver_bind_addr: SocketAddr,
+        producer_bind_addr: SocketAddr,
     ) -> OrchestratorResult<()> {
         process_debug!(ProcessId::current(), "🚀 Initializing orchestrator...");
 
@@ -118,23 +119,191 @@ where
         Ok(())
     }
 
-    /// Initialize for CLI mode (no webserver)
-    pub async fn initialize_cli_mode(&mut self, producer_bind_addr: std::net::SocketAddr) -> OrchestratorResult<()> {
-        process_debug!(ProcessId::current(), "🚀 Initializing orchestrator in CLI mode...");
-
-        // Load API keys
-        let api_keys = self.api_keys.get_api_keys().await?;
-        process_debug!(ProcessId::current(), "🔑 Loaded {} API keys", api_keys.len());
-
-        // Start only producer listener (no webserver)
-        let producer_rx = self.communicator.start_producer_listener(producer_bind_addr).await?;
-
+    /// Initialize Orchestrator for CLI mode (no webserver)
+    pub async fn initialize_cli_mode(&mut self, producer_addr: SocketAddr) -> OrchestratorResult<()> {
+        // Start producer listener (essential for CLI mode to receive producer updates)
+        let producer_rx = self.communicator.start_producer_listener(producer_addr).await?;
+        
         self.producer_rx = Some(producer_rx);
-        self.producer_addr = Some(producer_bind_addr);
+        self.producer_addr = Some(producer_addr);
+        
+        process_debug!(ProcessId::current(), "✅ Orchestrator initialized for CLI mode with producer listener on {}", producer_addr);
+        Ok(())
+    }
 
-        process_debug!(ProcessId::current(), "🏭 Producer listener: {}", producer_bind_addr);
-        logging::log_success(ProcessId::current(), "Orchestrator initialized in CLI mode");
+    /// Resolve routing strategy using fallback hierarchy: API params → orchestrator default → optimizer default
+    async fn resolve_routing_strategy(
+        &self,
+        api_routing_strategy: Option<String>,
+        api_routing_config: Option<String>,
+        optimizer_default: &shared::RoutingStrategy,
+    ) -> shared::RoutingStrategy {
+        // Priority 1: API parameters provided
+        if let (Some(strategy), Some(config)) = (api_routing_strategy, api_routing_config) {
+            if let Ok(resolved_strategy) = self.parse_routing_strategy_and_config(&strategy, &config) {
+                tracing::debug!("🎯 Using API routing parameters: {} with config {}", strategy, config);
+                return resolved_strategy;
+            }
+        }
 
+        // Priority 2: Check orchestrator default routing strategy
+        let state = self.state.lock().await;
+        if let Some(default_strategy) = state.get_default_routing_strategy() {
+            tracing::debug!("🎯 Using orchestrator default routing strategy: {:?}", default_strategy);
+            return default_strategy.clone();
+        }
+
+        // Priority 3: Use optimizer default
+        tracing::debug!("🎯 Using optimizer default routing strategy: {:?}", optimizer_default);
+        optimizer_default.clone()
+    }
+
+    /// Parse routing strategy and config from string parameters
+    /// New format supports models: "openai:gpt-4o-mini" or "openai:gpt-4o-mini,anthropic:claude-3-sonnet"
+    fn parse_routing_strategy_and_config(&self, strategy: &str, config: &str) -> Result<shared::RoutingStrategy, String> {
+        match strategy.to_lowercase().as_str() {
+            "backoff" => {
+                // Config format: "openai" or "openai:gpt-4o-mini"
+                let provider_config = self.parse_provider_config(config)?;
+                Ok(shared::RoutingStrategy::Backoff { provider: provider_config })
+            }
+            "roundrobin" => {
+                // Config format: "openai,anthropic,gemini" or "openai:gpt-4o-mini,anthropic:claude-3-sonnet"
+                let providers = self.parse_provider_config_list(config)?;
+                Ok(shared::RoutingStrategy::RoundRobin { providers })
+            }
+            "priority" => {
+                // Config format: "openai,anthropic,gemini" or "openai:gpt-4o-mini,anthropic:claude-3-sonnet" (in priority order)
+                let providers = self.parse_provider_config_list(config)?;
+                Ok(shared::RoutingStrategy::PriorityOrder { providers })
+            }
+            "weighted" => {
+                // Config format: "openai:0.7,anthropic:0.3" or "openai:gpt-4o-mini:0.7,anthropic:claude-3-sonnet:0.3"
+                let weights = self.parse_weighted_provider_config(config)?;
+                Ok(shared::RoutingStrategy::Weighted { weights })
+            }
+            _ => Err(format!("Unknown routing strategy '{}'", strategy)),
+        }
+    }
+
+    /// Parse a single provider config from string (supports "provider" or "provider:model")
+    fn parse_provider_config(&self, provider_str: &str) -> Result<shared::types::ProviderConfig, String> {
+        let parts: Vec<&str> = provider_str.split(':').collect();
+        
+        let provider = match parts[0].to_lowercase().as_str() {
+            "openai" => shared::ProviderId::OpenAI,
+            "anthropic" => shared::ProviderId::Anthropic,
+            "gemini" => shared::ProviderId::Gemini,
+            "random" => shared::ProviderId::Random,
+            _ => return Err(format!("Unknown provider '{}'", parts[0])),
+        };
+        
+        let model = if parts.len() >= 2 {
+            parts[1].to_string()
+        } else {
+            // Use default model for provider
+            shared::types::ProviderConfig::with_default_model(provider).model
+        };
+        
+        Ok(shared::types::ProviderConfig::new(provider, model))
+    }
+    
+    /// Parse a single provider ID from string (legacy support)
+    fn parse_provider_id(&self, provider: &str) -> Result<shared::ProviderId, String> {
+        match provider.to_lowercase().as_str() {
+            "openai" => Ok(shared::ProviderId::OpenAI),
+            "anthropic" => Ok(shared::ProviderId::Anthropic),
+            "gemini" => Ok(shared::ProviderId::Gemini),
+            "random" => Ok(shared::ProviderId::Random),
+            _ => Err(format!("Unknown provider '{}'", provider)),
+        }
+    }
+
+    /// Parse a list of provider configs from "provider1,provider2,provider3" or "provider1:model1,provider2:model2" format
+    fn parse_provider_config_list(&self, config: &str) -> Result<Vec<shared::types::ProviderConfig>, String> {
+        config
+            .split(',')
+            .map(|p| self.parse_provider_config(p.trim()))
+            .collect()
+    }
+    
+
+    /// Parse weighted provider config from "provider1:model1:weight1,provider2:model2:weight2" or "provider1:weight1,provider2:weight2" format
+    fn parse_weighted_provider_config(&self, config: &str) -> Result<HashMap<shared::types::ProviderConfig, f32>, String> {
+        let mut weights = HashMap::new();
+        
+        for pair in config.split(',') {
+            let parts: Vec<&str> = pair.split(':').collect();
+            
+            let (provider_config, weight) = match parts.len() {
+                2 => {
+                    // Format: "provider:weight" (use default model)
+                    let provider_id = self.parse_provider_id(parts[0].trim())?;
+                    let provider_config = shared::types::ProviderConfig::with_default_model(provider_id);
+                    let weight: f32 = parts[1].trim().parse()
+                        .map_err(|_| format!("Invalid weight '{}', must be a number", parts[1]))?;
+                    (provider_config, weight)
+                }
+                3 => {
+                    // Format: "provider:model:weight"
+                    let provider_id = self.parse_provider_id(parts[0].trim())?;
+                    let model = parts[1].trim().to_string();
+                    let provider_config = shared::types::ProviderConfig::new(provider_id, model);
+                    let weight: f32 = parts[2].trim().parse()
+                        .map_err(|_| format!("Invalid weight '{}', must be a number", parts[2]))?;
+                    (provider_config, weight)
+                }
+                _ => {
+                    return Err(format!("Invalid weighted config format '{}', expected 'provider:weight' or 'provider:model:weight'", pair));
+                }
+            };
+            
+            weights.insert(provider_config, weight);
+        }
+        
+        Ok(weights)
+    }
+    
+
+
+    /// Set the Orchestrator's default routing strategy from args/env
+    pub async fn set_default_routing_strategy(&mut self, routing_strategy: Option<String>, routing_provider: Option<String>) -> OrchestratorResult<()> {
+        let default_strategy = if let (Some(strategy), Some(provider)) = (routing_strategy, routing_provider) {
+            match self.parse_routing_strategy_and_config(&strategy, &provider) {
+                Ok(parsed_strategy) => {
+                    tracing::debug!("🎯 Orchestrator default routing strategy set: {} with provider {}", strategy, provider);
+                    Some(parsed_strategy)
+                }
+                Err(e) => {
+                    tracing::warn!("⚠️ Failed to parse default routing strategy: {}", e);
+                    None
+                }
+            }
+        } else {
+            // Try to get from environment
+            match (std::env::var("ROUTING_STRATEGY"), std::env::var("ROUTING_PRIMARY_PROVIDER")) {
+                (Ok(strategy), Ok(provider)) => {
+                    tracing::debug!("🎯 Using routing strategy from environment: {} with provider {}", strategy, provider);
+                    match self.parse_routing_strategy_and_config(&strategy, &provider) {
+                        Ok(parsed_strategy) => {
+                            tracing::debug!("🎯 Orchestrator default routing strategy set from env: {} with provider {}", strategy, provider);
+                            Some(parsed_strategy)
+                        }
+                        Err(e) => {
+                            tracing::warn!("⚠️ Failed to parse env routing strategy: {}", e);
+                            None
+                        }
+                    }
+                }
+                _ => {
+                    tracing::debug!("🎯 No default routing strategy configured, will use optimizer defaults");
+                    None
+                }
+            }
+        };
+
+        let mut state = self.state.lock().await;
+        state.set_default_routing_strategy(default_strategy);
         Ok(())
     }
 
@@ -146,7 +315,7 @@ where
         iterations: Option<u32>,
         request_size: usize,
         routing_strategy: Option<String>,
-        routing_provider: Option<String>,
+        routing_config: Option<String>,
     ) -> OrchestratorResult<()> {
         process_debug!(ProcessId::current(), "🚀 Starting CLI generation");
 
@@ -172,7 +341,7 @@ where
         process_info!(ProcessId::current(), "✅ Topic '{}' started {}", topic, budget_str);
 
         // Start generation with a fake request ID and custom request size
-        self.start_generation_with_config(1, topic, producer_count, optimization_mode, constraints, request_size, routing_strategy, routing_provider)
+        self.start_generation_with_config(1, topic, producer_count, optimization_mode, constraints, request_size, routing_strategy, routing_config)
             .await?;
 
         Ok(())
@@ -250,6 +419,8 @@ where
                 optimization_mode,
                 constraints,
                 iterations,
+                routing_strategy,
+                routing_config,
             } => {
                 // Set iterations in state if provided
                 if let Some(iter_limit) = iterations {
@@ -257,7 +428,7 @@ where
                     state.set_cli_iterations(Some(iter_limit));
                 }
 
-                self.start_generation(request_id, topic, producer_count, optimization_mode, constraints)
+                self.start_generation(request_id, topic, producer_count, optimization_mode, constraints, routing_strategy, routing_config)
                     .await
             }
 
@@ -387,7 +558,7 @@ where
         constraints: GenerationConstraints,
         request_size: usize,
         routing_strategy_override: Option<String>,
-        routing_provider_override: Option<String>,
+        routing_config_override: Option<String>,
     ) -> OrchestratorResult<()> {
         // Get iteration budget from state and log topic start consistently
         let budget_str = {
@@ -405,20 +576,36 @@ where
         // Get API keys
         let api_keys = self.api_keys.get_api_keys().await?;
 
-        // Update state
+        // Resolve routing strategy first using the fallback hierarchy
+        let resolved_routing_strategy = self.resolve_routing_strategy(
+            routing_strategy_override,
+            routing_config_override,
+            &shared::RoutingStrategy::Weighted { weights: HashMap::new() }, // Default fallback
+        ).await;
+
+        // Update state with resolved routing strategy
         {
             let mut state = self.state.lock().await;
             state.start_generation(topic.clone(), optimization_mode, constraints);
+            // Set the resolved routing strategy as the topic-level strategy
+            state.context.routing_strategy = resolved_routing_strategy.clone();
         }
 
         // Generate initial prompt and configuration with custom request_size
         let (prompt, mut routing_strategy, mut generation_config) = {
             let state = self.state.lock().await;
             let optimizer = state.get_optimizer();
+            
+            // Get routing strategies for fallback hierarchy
+            let topic_routing_strategy = Some(&state.context.routing_strategy);
+            let orchestrator_default_routing_strategy = state.get_default_routing_strategy();
+            
             let optimization = optimizer.optimize_for_topic(
                 &topic,
                 &state.get_performance_stats(),
                 &state.context.optimization_targets.optimization_mode,
+                topic_routing_strategy,
+                orchestrator_default_routing_strategy,
             )?;
 
             tracing::debug!("🎯 CLI Orchestrator generated prompt: '{}'", optimization.optimized_prompt);
@@ -431,37 +618,12 @@ where
             )
         };
 
-        // Apply CLI routing overrides if provided
-        if let (Some(strategy), Some(provider)) = (&routing_strategy_override, &routing_provider_override) {
-            let provider_id = match provider.to_lowercase().as_str() {
-                "openai" => shared::ProviderId::OpenAI,
-                "anthropic" => shared::ProviderId::Anthropic,
-                "gemini" => shared::ProviderId::Gemini,
-                "random" => shared::ProviderId::Random,
-                _ => {
-                    tracing::warn!("⚠️ Unknown routing provider '{}', using Random", provider);
-                    shared::ProviderId::Random
-                }
-            };
-
-            routing_strategy = match strategy.to_lowercase().as_str() {
-                "backoff" => shared::RoutingStrategy::Backoff { provider: provider_id },
-                "roundrobin" => shared::RoutingStrategy::RoundRobin { providers: vec![provider_id] },
-                "priority" => shared::RoutingStrategy::PriorityOrder { providers: vec![provider_id] },
-                "weighted" => shared::RoutingStrategy::Weighted { weights: std::collections::HashMap::from([(provider_id, 1.0)]) },
-                _ => {
-                    tracing::warn!("⚠️ Unknown routing strategy '{}', using Backoff", strategy);
-                    shared::RoutingStrategy::Backoff { provider: provider_id }
-                }
-            };
-
-            tracing::debug!("🎯 CLI routing override: {} with provider {}", strategy, provider);
-        } else if api_keys.len() == 1 && api_keys.contains_key(&shared::ProviderId::Random) {
-            // Fallback: Override routing strategy for test mode (single Random provider)
+        // Special case: Override for test mode (single Random provider)
+        if api_keys.len() == 1 && api_keys.contains_key(&shared::ProviderId::Random) {
             routing_strategy = shared::RoutingStrategy::Backoff {
-                provider: shared::ProviderId::Random,
+                provider: shared::types::ProviderConfig::with_default_model(shared::ProviderId::Random),
             };
-            tracing::debug!("🎯 Test mode: using Random provider fallback");
+            tracing::debug!("🎯 Test mode override: using Random provider fallback");
         }
 
         // Override request_size with CLI parameter
@@ -504,7 +666,7 @@ where
         Ok(())
     }
 
-    /// Start generation process
+    /// Start generation process with optional routing parameters
     async fn start_generation(
         &self,
         request_id: u64,
@@ -512,89 +674,22 @@ where
         producer_count: u32,
         optimization_mode: OptimizationMode,
         constraints: GenerationConstraints,
+        routing_strategy: Option<String>,
+        routing_config: Option<String>,
     ) -> OrchestratorResult<()> {
-        // Log topic start consistently (webserver mode typically has no iteration limit)
-        process_info!(
-            ProcessId::current(),
-            "✅ Topic '{}' started with no iteration budget",
-            topic
-        );
-
-        // Create topic directory
-        self.file_system.create_topic_directory(&topic).await?;
-
-        // Get API keys
-        let api_keys = self.api_keys.get_api_keys().await?;
-
-        // Update state
-        {
-            let mut state = self.state.lock().await;
-            state.start_generation(topic.clone(), optimization_mode, constraints);
-        }
-
-        // Spawn producers
-        let producer_addr = self.producer_addr.expect("Producer address not initialized");
-        let producer_infos = self
-            .process_manager
-            .spawn_producers(producer_count, &topic, api_keys, producer_addr, None)
-            .await?;
-
-        // Register producers with communicator
-        for info in &producer_infos {
-            self.communicator
-                .register_producer(info.id.clone(), info.command_address)
-                .await?;
-        }
-
-        // Generate initial prompt and configuration
-        let (prompt, routing_strategy, generation_config) = {
-            let state = self.state.lock().await;
-            let optimizer = state.get_optimizer();
-            let optimization = optimizer.optimize_for_topic(
-                &topic,
-                &state.get_performance_stats(),
-                &state.context.optimization_targets.optimization_mode,
-            )?;
-
-            tracing::debug!("🎯 Orchestrator generated prompt: '{}'", optimization.optimized_prompt);
-            tracing::debug!("🎯 Topic: '{}', Routing: {:?}", topic, optimization.routing_strategy);
-
-            (
-                optimization.optimized_prompt,
-                optimization.routing_strategy,
-                optimization.generation_config,
-            )
-        };
-
-        // Queue start commands for all producers (will be sent when they become ready)
-        {
-            let mut state = self.state.lock().await;
-            for info in &producer_infos {
-                let command = OrchestratorCommand::Start {
-                    command_id: 1,
-                    topic: topic.clone(),
-                    prompt: prompt.clone(),
-                    routing_strategy: routing_strategy.clone(),
-                    generation_config: generation_config.clone(),
-                };
-
-                state.queue_start_command(info.id.clone(), command);
-                // Update state with active producers
-                state.add_producer(info.id.clone(), info.process_id, ProcessStatus::Running);
-            }
-        }
-
-        // Send acknowledgment to webserver
-        let ack = OrchestratorUpdate::RequestAck {
+        // Use default request size for API calls
+        const DEFAULT_REQUEST_SIZE: usize = 60;
+        
+        self.start_generation_with_config(
             request_id,
-            success: true,
-            message: Some(format!("Started generation with {} producers", producer_infos.len())),
-        };
-
-        self.communicator.send_webserver_update(ack).await?;
-
-        process_debug!(ProcessId::current(), "✅ Generation started successfully");
-        Ok(())
+            topic,
+            producer_count,
+            optimization_mode,
+            constraints,
+            DEFAULT_REQUEST_SIZE,
+            routing_strategy,
+            routing_config,
+        ).await
     }
 
     /// Stop generation process
@@ -765,6 +860,8 @@ where
                     topic,
                     &state.get_performance_stats(),
                     &state.context.optimization_targets.optimization_mode,
+                    Some(&state.context.routing_strategy),
+                    state.get_default_routing_strategy(),
                 ) {
                     let command = OrchestratorCommand::Start {
                         command_id: chrono::Utc::now().timestamp_millis() as u64,
@@ -935,6 +1032,8 @@ where
                     topic,
                     &performance_stats,
                     &state.context.optimization_targets.optimization_mode,
+                    Some(&state.context.routing_strategy),
+                    state.get_default_routing_strategy(),
                 ) {
                     if optimization.confidence > 0.8 {
                         process_debug!(
@@ -1109,6 +1208,8 @@ where
                         &topic,
                         &state.get_performance_stats(),
                         &state.context.optimization_targets.optimization_mode,
+                        Some(&state.context.routing_strategy),
+                        state.get_default_routing_strategy(),
                     ) {
                         let command = OrchestratorCommand::Start {
                             command_id: chrono::Utc::now().timestamp_millis() as u64,
