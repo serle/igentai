@@ -13,7 +13,6 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_DIR="logs"
 DEBUG_LOG="$LOG_DIR/debug_${TIMESTAMP}.log"
 ANALYSIS_LOG="$LOG_DIR/analysis_${TIMESTAMP}.log"
-TRACE_LOG="$LOG_DIR/trace_collector.log"
 
 echo "🧪 LLM Orchestration System - Test & Analysis"
 echo "============================================="
@@ -45,8 +44,8 @@ echo "🧹 Cleaning up existing processes..."
 pkill -f "orchestrator|producer|webserver" 2>/dev/null || true
 sleep 1
 
-# Clear trace log
-echo "" > $TRACE_LOG
+# Note: trace_collector.log is not created unless tracing endpoint is configured
+# This script only uses console debug logging, not file-based trace collection
 
 # Start orchestrator with debug output to file
 echo "🚀 Starting orchestrator with debug logging..."
@@ -184,7 +183,7 @@ echo ""
 echo "📁 Output Files:"
 echo "  - Debug Log: $DEBUG_LOG"
 echo "  - Analysis Report: $ANALYSIS_LOG"
-echo "  - Trace Log: $TRACE_LOG"
+echo "  - Trace collection: Not enabled (console logging only)"
 echo ""
 
 # Option to view analysis

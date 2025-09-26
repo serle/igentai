@@ -36,8 +36,8 @@ echo -e "${YELLOW}🧹 Cleaning up existing processes...${NC}"
 pkill -f "orchestrator|producer|webserver" 2>/dev/null || true
 sleep 1
 
-# Clear trace log
-echo "" > "$LOG_DIR/trace_collector.log"
+# Note: trace_collector.log is not created unless tracing endpoint is configured
+# This script only uses console debug logging, not file-based trace collection
 
 echo -e "${GREEN}🚀 Starting orchestrator with debug logging...${NC}"
 echo "=============================================="

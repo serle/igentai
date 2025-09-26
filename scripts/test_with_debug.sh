@@ -14,7 +14,6 @@ TOPIC="${1:-test topic}"
 PRODUCER_COUNT="${2:-3}"
 LOG_DIR="logs"
 LOG_FILE="$LOG_DIR/test_debug_$(date +%Y%m%d_%H%M%S).log"
-TRACE_LOG="$LOG_DIR/trace_collector.log"
 
 echo "📝 Configuration:"
 echo "   - Topic: $TOPIC"
@@ -32,8 +31,8 @@ echo "🧹 Cleaning up existing processes..."
 pkill -f "orchestrator|producer|webserver" 2>/dev/null || true
 sleep 1
 
-# Clear trace log
-echo "" > $TRACE_LOG
+# Note: trace_collector.log is not created unless tracing endpoint is configured
+# This script only uses console debug logging, not file-based trace collection
 
 echo "🚀 Starting orchestrator with debug logging..."
 cargo run --bin orchestrator -- --log-level debug > "$LOG_FILE" 2>&1 &
@@ -126,5 +125,5 @@ fi
 
 echo ""
 echo "📁 Debug log saved to: $LOG_FILE"
-echo "📁 Trace log available at: $TRACE_LOG"
+echo "📁 Trace collection: Not enabled (console logging only)"
 echo ""
