@@ -9,10 +9,10 @@ use uuid::Uuid;
 
 use crate::types::{
     ActivityEvent, ActivityType, Alert, AlertLevel, ClientMessage, ClientSession, DashboardData, OptimizationInsight,
-    PerformanceMetrics, SystemHealth, TrendDirection, convert_to_websocket_message, create_default_provider_metadata,
+    PerformanceMetrics, SystemHealth, TrendDirection, convert_to_websocket_message,
 };
 use shared::messages::webserver::CompletionReason;
-use shared::{OrchestratorUpdate, SystemMetrics, ProcessId};
+use shared::{OrchestratorUpdate, SystemMetrics};
 
 /// Central WebServer state containing all business logic
 pub struct WebServerState {

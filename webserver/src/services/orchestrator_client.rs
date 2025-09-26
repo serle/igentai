@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{RwLock, mpsc};
-use tracing::{debug, error, info, warn};
+use tracing::debug;
 
 use crate::error::{WebServerError, WebServerResult};
 use crate::traits::OrchestratorClient;
@@ -176,17 +176,17 @@ impl OrchestratorClient for RealOrchestratorClient {
                                     Ok(update) => {
                                         debug!("📨 Received update: {:?}", update);
                                         if tx.send(update).await.is_err() {
-                                            warn!("Update receiver dropped");
+                                            shared::process_warn!(shared::ProcessId::current(), "Update receiver dropped");
                                         }
                                     }
                                     Err(e) => {
-                                        error!("❌ Failed to read update: {}", e);
+                                        shared::process_error!(shared::ProcessId::current(), "❌ Failed to read update: {}", e);
                                     }
                                 }
                             });
                         }
                         Err(e) => {
-                            error!("❌ Failed to accept connection: {}", e);
+                            shared::process_error!(shared::ProcessId::current(), "❌ Failed to accept connection: {}", e);
                         }
                     }
                 }
@@ -200,7 +200,7 @@ impl OrchestratorClient for RealOrchestratorClient {
 
             process_debug!(ProcessId::current(), "📤 Sending ready signal to orchestrator");
             if let Err(e) = self.send_request(ready_msg).await {
-                warn!("⚠️ Failed to send ready signal: {}", e);
+                shared::process_warn!(shared::ProcessId::current(), "⚠️ Failed to send ready signal: {}", e);
             } else {
                 process_info!(ProcessId::current(), "✅ WebServer ready and connected to orchestrator");
             }
@@ -224,19 +224,19 @@ impl OrchestratorClient for RealOrchestratorClient {
                             Ok(())
                         }
                         Err(e) => {
-                            error!("❌ Failed to send request: {}", e);
+                            shared::process_error!(shared::ProcessId::current(), "❌ Failed to send request: {}", e);
                             Err(e)
                         }
                     }
                 }
                 Err(e) => {
-                    error!("❌ Failed to connect for request: {}", e);
+                    shared::process_error!(shared::ProcessId::current(), "❌ Failed to connect for request: {}", e);
                     Err(WebServerError::communication(format!("Failed to connect: {e}")))
                 }
             }
         } else {
             // Standalone mode: Just log and ignore
-            debug!("📤 Ignoring request in standalone mode: {:?}", request);
+            process_debug!(shared::ProcessId::current(), "📤 Ignoring request in standalone mode: {:?}", request);
             Ok(())
         }
     }
@@ -253,11 +253,11 @@ impl OrchestratorClient for RealOrchestratorClient {
     }
 
     async fn disconnect(&self) -> WebServerResult<()> {
-        info!("🔌 Disconnecting from orchestrator");
+        shared::process_info!(shared::ProcessId::current(), "🔌 Disconnecting from orchestrator");
 
         *self.connection.connected.write().await = false;
 
-        info!("✅ Disconnected from orchestrator");
+        shared::process_info!(shared::ProcessId::current(), "✅ Disconnected from orchestrator");
         Ok(())
     }
 }

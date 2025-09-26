@@ -19,9 +19,9 @@ pub use traits::{OrchestratorClient, StaticFileServer, WebSocketManager};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-use tracing::{debug, error, info};
+use tracing::debug;
 
-use shared::{OrchestratorUpdate, ProcessId, process_debug, process_info};
+use shared::{OrchestratorUpdate, ProcessId, process_debug};
 use crate::types::ClientMessage;
 // Handler wrapper functions for AppState
 use axum::Json;
@@ -116,13 +116,17 @@ where
 
     /// Main WebServer run loop
     pub async fn run(&mut self, http_addr: SocketAddr, standalone_mode: bool) -> WebServerResult<()> {
-        info!(
+        shared::process_info!(
+            shared::ProcessId::current(),
             "🚀 Starting WebServer initialization (standalone_mode: {})",
             standalone_mode
         );
 
         let mut orchestrator_updates = if standalone_mode {
-            info!("🔧 Standalone mode - skipping orchestrator connection");
+            shared::process_info!(
+                shared::ProcessId::current(),
+                "🔧 Standalone mode - skipping orchestrator connection"
+            );
             // Create a dummy receiver that will never receive messages but keeps sender alive
             let (tx, rx) = mpsc::channel(1);
             // Keep the sender alive by storing it
@@ -144,11 +148,15 @@ where
                                 let mut state = self.state.lock().await;
                                 state.set_orchestrator_connected(true);
                             }
-                            info!("✅ Connected to orchestrator successfully");
+                            shared::process_info!(
+                                shared::ProcessId::current(),
+                                "✅ Connected to orchestrator successfully"
+                            );
                             updates
                         }
                         Err(e) => {
-                            error!(
+                            shared::process_error!(
+                                shared::ProcessId::current(),
                                 "⚠️ Failed to get orchestrator updates, continuing in offline mode: {}",
                                 e
                             );
@@ -159,7 +167,8 @@ where
                     }
                 }
                 Err(e) => {
-                    error!(
+                    shared::process_error!(
+                        shared::ProcessId::current(),
                         "⚠️ Failed to connect to orchestrator, continuing in offline mode: {}",
                         e
                     );
@@ -176,7 +185,11 @@ where
             .await
             .map_err(|e| WebServerError::http(format!("Failed to bind to {}: {}", http_addr, e)))?;
 
-        info!("🌐 WebServer HTTP listening on {}", http_addr);
+        shared::process_info!(
+            shared::ProcessId::current(),
+            "🌐 WebServer HTTP listening on {}", 
+            http_addr
+        );
 
         // Start background tasks - DISABLED FOR DEBUGGING
         // let analytics_task = self.start_analytics_task();
@@ -184,19 +197,19 @@ where
 
         // Spawn the HTTP server task
         let mut server_handle = tokio::spawn(async move {
-            info!("🚀 Starting axum HTTP server...");
-            info!("About to call axum::serve...");
+            shared::process_info!(shared::ProcessId::current(), "🚀 Starting axum HTTP server...");
+            shared::process_info!(shared::ProcessId::current(), "About to call axum::serve...");
 
             match axum::serve(listener, app.into_make_service()).await {
                 Ok(_) => {
-                    info!("✅ Axum server completed normally");
+                    shared::process_info!(shared::ProcessId::current(), "✅ Axum server completed normally");
                 }
                 Err(e) => {
-                    error!("❌ Axum server error: {}", e);
+                    shared::process_error!(shared::ProcessId::current(), "❌ Axum server error: {}", e);
                 }
             }
 
-            info!("🏁 Server task finishing");
+            shared::process_info!(shared::ProcessId::current(), "🏁 Server task finishing");
         });
 
         // Main event loop
@@ -206,15 +219,15 @@ where
                 tokio::select! {
                     // Handle shutdown signal
                     Some(_) = self.shutdown_rx.recv() => {
-                        info!("🛑 Shutting down WebServer...");
+                        shared::process_info!(shared::ProcessId::current(), "🛑 Shutting down WebServer...");
                         break;
                     },
 
                     // Handle server completion
                     result = &mut server_handle => {
                         match result {
-                            Ok(()) => info!("HTTP server completed successfully"),
-                            Err(e) => error!("HTTP server task error: {}", e),
+                            Ok(()) => shared::process_info!(shared::ProcessId::current(), "HTTP server completed successfully"),
+                            Err(e) => shared::process_error!(shared::ProcessId::current(), "HTTP server task error: {}", e),
                         }
                         break;
                     }
@@ -228,21 +241,21 @@ where
                     Some(update) = orchestrator_updates.recv() => {
                         debug!("📨 Received orchestrator update in webserver main loop");
                         if let Err(e) = self.handle_orchestrator_update(update).await {
-                            error!("❌ Error handling orchestrator update: {}", e);
+                            shared::process_error!(shared::ProcessId::current(), "❌ Error handling orchestrator update: {}", e);
                         }
                     },
 
                     // Handle shutdown signal
                     Some(_) = self.shutdown_rx.recv() => {
-                        info!("🛑 Shutting down WebServer...");
+                        shared::process_info!(shared::ProcessId::current(), "🛑 Shutting down WebServer...");
                         break;
                     },
 
                     // Handle server completion
                     result = &mut server_handle => {
                         match result {
-                            Ok(()) => info!("HTTP server completed successfully"),
-                            Err(e) => error!("HTTP server task error: {}", e),
+                            Ok(()) => shared::process_info!(shared::ProcessId::current(), "HTTP server completed successfully"),
+                            Err(e) => shared::process_error!(shared::ProcessId::current(), "HTTP server task error: {}", e),
                         }
                         break;
                     }
@@ -255,7 +268,7 @@ where
         // analytics_task.abort();
         // health_check_task.abort();
 
-        info!("✅ WebServer shutdown complete");
+        shared::process_info!(shared::ProcessId::current(), "✅ WebServer shutdown complete");
         Ok(())
     }
 
@@ -274,7 +287,7 @@ where
 
         // Check connected clients
         let client_count = self.websocket_manager.client_count().await;
-        info!("📊 Processing update with {} WebSocket clients connected", client_count);
+        shared::process_info!(shared::ProcessId::current(), "📊 Processing update with {} WebSocket clients connected", client_count);
 
         // Process update through state
         let client_messages = {

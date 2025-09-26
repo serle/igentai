@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{error, info, warn};
 
 use crate::error::{WebServerError, WebServerResult};
 use crate::traits::{StaticFileResponse, StaticFileServer};
@@ -97,7 +96,7 @@ impl RealStaticFileServer {
         let canonical_base = match self.base_dir.canonicalize() {
             Ok(path) => path,
             Err(e) => {
-                error!("Failed to canonicalize base directory: {}", e);
+                shared::process_error!(shared::ProcessId::current(), "Failed to canonicalize base directory: {}", e);
                 return Err(WebServerError::internal(
                     "Static file base directory not accessible".to_string(),
                 ));
@@ -135,7 +134,7 @@ impl StaticFileServer for RealStaticFileServer {
                 let content_type = self.get_mime_type(path);
                 let cache_control = self.get_cache_control(path);
 
-                info!("📄 Served static file: {} ({} bytes)", path, content.len());
+                shared::process_info!(shared::ProcessId::current(), "📄 Served static file: {} ({} bytes)", path, content.len());
 
                 let mut response = StaticFileResponse::new(content, content_type);
                 if let Some(cache) = cache_control {
@@ -145,7 +144,7 @@ impl StaticFileServer for RealStaticFileServer {
                 Ok(response)
             }
             Err(e) => {
-                warn!("❌ Failed to read static file {}: {}", path, e);
+                shared::process_warn!(shared::ProcessId::current(), "❌ Failed to read static file {}: {}", path, e);
                 Err(WebServerError::http(format!("File not found: {}", path)))
             }
         }
@@ -192,7 +191,7 @@ impl StaticFileServer for RealStaticFileServer {
                 Ok(files)
             }
             Err(e) => {
-                error!("Failed to list files: {}", e);
+                shared::process_error!(shared::ProcessId::current(), "Failed to list files: {}", e);
                 Err(WebServerError::internal(format!("Failed to list files: {}", e)))
             }
         }

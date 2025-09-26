@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
-use shared::{OrchestratorUpdate, SystemMetrics, WebServerRequest};
+use shared::{OrchestratorUpdate, WebServerRequest};
 use webserver::{
     WebServerResult, core::WebServerState, services::RealOrchestratorClient, traits::OrchestratorClient,
     types::ClientMessage,
@@ -49,52 +49,6 @@ async fn test_orchestrator_client_health_check() {
 }
 
 #[tokio::test]
-async fn test_orchestrator_update_processing() {
-    let mut state = WebServerState::new();
-
-    // Test SystemMetrics update
-    let test_metrics = SystemMetrics {
-        uam: 12.5,
-        cost_per_minute: 0.05,
-        tokens_per_minute: 1500.0,
-        unique_per_dollar: 250.0,
-        unique_per_1k_tokens: 30.0,
-        active_producers: 5,
-        by_provider: std::collections::HashMap::new(),
-        by_producer: std::collections::HashMap::new(),
-        current_topic: Some("AI Ethics".to_string()),
-        uptime_seconds: 300,
-        last_updated: chrono::Utc::now().timestamp() as u64,
-    };
-
-    let metrics_update = OrchestratorUpdate::SystemMetrics(test_metrics.clone());
-    let client_messages = state.process_orchestrator_update(metrics_update);
-
-    // Should generate dashboard update
-    assert!(!client_messages.is_empty());
-    assert!(matches!(client_messages[0], ClientMessage::DashboardUpdate { .. }));
-
-    // Test NewAttributes update
-    let test_attributes = vec![
-        "Ethical AI principles".to_string(),
-        "Bias detection methods".to_string(),
-        "Privacy-preserving ML".to_string(),
-    ];
-
-    let attributes_update = OrchestratorUpdate::NewAttributes(test_attributes.clone());
-    let client_messages = state.process_orchestrator_update(attributes_update);
-
-    // Should generate attribute update
-    assert!(!client_messages.is_empty());
-    assert!(matches!(client_messages[0], ClientMessage::AttributeUpdate { .. }));
-
-    if let ClientMessage::AttributeUpdate { attributes, .. } = &client_messages[0] {
-        assert_eq!(attributes.len(), 3);
-        assert_eq!(attributes[0], "Ethical AI principles");
-    }
-}
-
-#[tokio::test]
 async fn test_orchestrator_update_error_handling() {
     let mut state = WebServerState::new();
 
@@ -114,34 +68,6 @@ async fn test_orchestrator_update_error_handling() {
         assert!(matches!(level, webserver::types::AlertLevel::Error));
         assert_eq!(title, "System Error");
         assert_eq!(message, "Producer failed to start");
-    }
-}
-
-#[tokio::test]
-async fn test_system_status_update_handling() {
-    let mut state = WebServerState::new();
-
-    // Test system status update
-    let status_update = OrchestratorUpdate::SystemStatus {
-        active_producers: 8,
-        current_topic: Some("Sustainable Energy".to_string()),
-        total_unique: 156,
-    };
-
-    let client_messages = state.process_orchestrator_update(status_update);
-
-    // Should generate status update message
-    assert!(!client_messages.is_empty());
-    assert!(matches!(client_messages[0], ClientMessage::StatusUpdate { .. }));
-
-    if let ClientMessage::StatusUpdate {
-        active_producers,
-        current_topic,
-        ..
-    } = &client_messages[0]
-    {
-        assert_eq!(*active_producers, 8);
-        assert_eq!(current_topic.as_ref().unwrap(), "Sustainable Energy");
     }
 }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tracing::{debug, error, info, warn};
+use shared::{process_debug, process_error, process_info, process_warn, ProcessId};
 
 /// Connection state for the communicator
 #[derive(Clone)]
@@ -171,14 +171,14 @@ impl RealCommunicator {
                 if let Some(ref mut stream) = *stream_guard {
                     match Self::read::<ProducerCommand>(stream).await {
                         Ok(command) => {
-                            debug!("📨 Received command: {:?}", command);
+                            process_debug!(ProcessId::current(), "📨 Received command: {:?}", command);
                             if tx.send(command).await.is_err() {
-                                warn!("Command receiver dropped, stopping listener");
+                                process_warn!(ProcessId::current(), "Command receiver dropped, stopping listener");
                                 break;
                             }
                         }
                         Err(e) => {
-                            error!("❌ Failed to read command: {}", e);
+                            process_error!(ProcessId::current(), "❌ Failed to read command: {}", e);
                             *connection.connected.write().await = false;
                             *connection.stream.lock().await = None;
                             break;
@@ -189,7 +189,7 @@ impl RealCommunicator {
                 }
             }
 
-            info!("🛑 Command listener stopped");
+            process_info!(ProcessId::current(), "🛑 Command listener stopped");
         });
 
         Ok(())
@@ -206,9 +206,9 @@ impl RealCommunicator {
                     match Self::write(&mut stream, &update).await {
                         Ok(()) => {
                             if attempt > 0 {
-                                info!("✅ Sent update after {} retries: {:?}", attempt, update);
+                                process_info!(ProcessId::current(), "✅ Sent update after {} retries: {:?}", attempt, update);
                             } else {
-                                debug!("📤 Sent update: {:?}", update);
+                                process_debug!(ProcessId::current(), "📤 Sent update: {:?}", update);
                             }
                             return Ok(());
                         }
@@ -216,7 +216,8 @@ impl RealCommunicator {
                             last_error = Some(e);
                             if attempt < max_retries {
                                 let delay = std::time::Duration::from_millis(50 * (attempt + 1) as u64);
-                                warn!(
+                                process_warn!(
+                                    ProcessId::current(),
                                     "⏳ Failed to send update (attempt {}), retrying in {}ms: {}",
                                     attempt + 1,
                                     delay.as_millis(),
@@ -231,7 +232,8 @@ impl RealCommunicator {
                     last_error = Some(ProducerError::ipc(format!("Failed to connect: {e}")));
                     if attempt < max_retries {
                         let delay = std::time::Duration::from_millis(50 * (attempt + 1) as u64);
-                        warn!(
+                        process_warn!(
+                            ProcessId::current(),
                             "⏳ Failed to connect for update (attempt {}), retrying in {}ms: {}",
                             attempt + 1,
                             delay.as_millis(),
@@ -243,7 +245,8 @@ impl RealCommunicator {
             }
         }
 
-        error!(
+        process_error!(
+            ProcessId::current(),
             "❌ Failed to send update after {} retries, orchestrator may be unreachable",
             max_retries
         );
@@ -256,18 +259,18 @@ impl Communicator for RealCommunicator {
     async fn initialize(&mut self) -> ProducerResult<()> {
         if self.standalone_mode {
             // Standalone mode: No IPC setup
-            info!("🔧 Producer communicator initialized in standalone mode");
+            process_info!(ProcessId::current(), "🔧 Producer communicator initialized in standalone mode");
             Ok(())
         } else if let Some(port) = self.listen_port {
             // IPC mode: Start listening for commands from orchestrator
-            info!("🔊 Starting command listener on port {}", port);
+            process_info!(ProcessId::current(), "🔊 Starting command listener on port {}", port);
 
             let bind_addr = SocketAddr::from(([127, 0, 0, 1], port));
             let listener = TcpListener::bind(bind_addr)
                 .await
                 .map_err(|e| ProducerError::ipc(format!("Failed to bind to {bind_addr}: {e}")))?;
 
-            info!("✅ Producer listening on {} for commands", bind_addr);
+            process_info!(ProcessId::current(), "✅ Producer listening on {} for commands", bind_addr);
 
             // Mark as connected (ready to receive commands)
             *self.connection.connected.write().await = true;
@@ -282,7 +285,7 @@ impl Communicator for RealCommunicator {
                 loop {
                     match listener.accept().await {
                         Ok((mut stream, addr)) => {
-                            debug!("📥 Accepted connection from {}", addr);
+                            process_debug!(ProcessId::current(), "📥 Accepted connection from {}", addr);
                             let tx = tx.clone();
 
                             // Handle each connection in a separate task with continuous reading
@@ -290,23 +293,23 @@ impl Communicator for RealCommunicator {
                                 loop {
                                     match Self::read::<ProducerCommand>(&mut stream).await {
                                         Ok(command) => {
-                                            debug!("📨 Received command: {:?}", command);
+                                            process_debug!(ProcessId::current(), "📨 Received command: {:?}", command);
                                             if tx.send(command).await.is_err() {
-                                                warn!("Command receiver dropped, closing connection");
+                                                process_warn!(ProcessId::current(), "Command receiver dropped, closing connection");
                                                 break;
                                             }
                                         }
                                         Err(e) => {
-                                            debug!("🔌 Connection closed or error reading command: {}", e);
+                                            process_debug!(ProcessId::current(), "🔌 Connection closed or error reading command: {}", e);
                                             break;
                                         }
                                     }
                                 }
-                                debug!("🛑 Connection handler finished");
+                                process_debug!(ProcessId::current(), "🛑 Connection handler finished");
                             });
                         }
                         Err(e) => {
-                            error!("❌ Failed to accept connection: {}", e);
+                            process_error!(ProcessId::current(), "❌ Failed to accept connection: {}", e);
                         }
                     }
                 }
@@ -318,21 +321,21 @@ impl Communicator for RealCommunicator {
                 listen_port: port,
             };
 
-            info!("📤 Sending ready signal to orchestrator");
+            process_info!(ProcessId::current(), "📤 Sending ready signal to orchestrator");
             if let Err(e) = self.send_update(ready_msg).await {
-                warn!("⚠️ Failed to send ready signal: {}", e);
+                process_warn!(ProcessId::current(), "⚠️ Failed to send ready signal: {}", e);
             } else {
-                info!("✅ Ready signal sent to orchestrator");
+                process_info!(ProcessId::current(), "✅ Ready signal sent to orchestrator");
             }
 
             Ok(())
         } else {
             // Old behavior: connect to orchestrator
-            info!("🔗 Connecting to orchestrator at {}", self.connection.orchestrator_addr);
+            process_info!(ProcessId::current(), "🔗 Connecting to orchestrator at {}", self.connection.orchestrator_addr);
 
             match TcpStream::connect(self.connection.orchestrator_addr).await {
                 Ok(stream) => {
-                    info!("✅ Connected to orchestrator successfully");
+                    process_info!(ProcessId::current(), "✅ Connected to orchestrator successfully");
 
                     *self.connection.stream.lock().await = Some(stream);
                     *self.connection.connected.write().await = true;
@@ -340,7 +343,7 @@ impl Communicator for RealCommunicator {
                     Ok(())
                 }
                 Err(e) => {
-                    error!("❌ Failed to connect to orchestrator: {}", e);
+                    process_error!(ProcessId::current(), "❌ Failed to connect to orchestrator: {}", e);
                     Err(ProducerError::ipc(format!("Connection failed: {e}")))
                 }
             }
@@ -370,7 +373,7 @@ impl Communicator for RealCommunicator {
     async fn send_update(&self, update: ProducerUpdate) -> ProducerResult<()> {
         if self.standalone_mode {
             // Standalone mode: Just log and ignore
-            debug!("📤 Ignoring update in standalone mode: {:?}", update);
+            process_debug!(ProcessId::current(), "📤 Ignoring update in standalone mode: {:?}", update);
             Ok(())
         } else {
             // IPC mode: Send update to orchestrator with retry logic
@@ -387,7 +390,7 @@ impl Communicator for RealCommunicator {
     }
 
     async fn disconnect(&self) -> ProducerResult<()> {
-        info!("🔌 Disconnecting from orchestrator");
+        process_info!(ProcessId::current(), "🔌 Disconnecting from orchestrator");
 
         *self.connection.connected.write().await = false;
 
@@ -396,7 +399,7 @@ impl Communicator for RealCommunicator {
             drop(stream); // Close the connection
         }
 
-        info!("✅ Disconnected from orchestrator");
+        process_info!(ProcessId::current(), "✅ Disconnected from orchestrator");
         Ok(())
     }
 }

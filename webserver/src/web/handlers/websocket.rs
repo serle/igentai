@@ -12,7 +12,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::error::WebServerResult;
@@ -33,7 +33,7 @@ where
     W: WebSocketManager,
 {
     let client_id = Uuid::new_v4();
-    info!("🔗 New WebSocket connection: {}", client_id);
+    shared::process_info!(shared::ProcessId::current(), "🔗 New WebSocket connection: {}", client_id);
 
     // Split the socket into sender and receiver
     let (mut sender, mut receiver) = socket.split();
@@ -43,7 +43,7 @@ where
 
     // Register client with WebSocket manager
     if let Err(e) = websocket_manager.add_client(client_id, tx).await {
-        error!("Failed to register WebSocket client {}: {}", client_id, e);
+        shared::process_error!(shared::ProcessId::current(), "Failed to register WebSocket client {}: {}", client_id, e);
         return;
     }
 
@@ -54,13 +54,13 @@ where
             let json_msg = match serde_json::to_string(&msg) {
                 Ok(json) => json,
                 Err(e) => {
-                    error!("Failed to serialize client message: {}", e);
+                    shared::process_error!(shared::ProcessId::current(), "Failed to serialize client message: {}", e);
                     continue;
                 }
             };
 
             if let Err(e) = sender.send(Message::Text(json_msg)).await {
-                warn!("Failed to send message to client {}: {}", client_id, e);
+                shared::process_warn!(shared::ProcessId::current(), "Failed to send message to client {}: {}", client_id, e);
                 break;
             }
         }
@@ -73,7 +73,7 @@ where
         let msg = match msg {
             Ok(msg) => msg,
             Err(e) => {
-                warn!("WebSocket error for client {}: {}", client_id, e);
+                shared::process_warn!(shared::ProcessId::current(), "WebSocket error for client {}: {}", client_id, e);
                 break;
             }
         };
@@ -86,11 +86,11 @@ where
                 match serde_json::from_str::<ClientRequest>(&text) {
                     Ok(request) => {
                         if let Err(e) = handle_client_request(client_id, request, &websocket_manager).await {
-                            error!("Failed to handle client request from {}: {}", client_id, e);
+                            shared::process_error!(shared::ProcessId::current(), "Failed to handle client request from {}: {}", client_id, e);
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to parse client request from {}: {}", client_id, e);
+                        shared::process_warn!(shared::ProcessId::current(), "Failed to parse client request from {}: {}", client_id, e);
 
                         // Send error response
                         let error_msg = ClientMessage::Alert {
@@ -102,13 +102,13 @@ where
                         };
 
                         if let Err(e) = websocket_manager.send_to_client(client_id, error_msg).await {
-                            error!("Failed to send error message to client {}: {}", client_id, e);
+                            shared::process_error!(shared::ProcessId::current(), "Failed to send error message to client {}: {}", client_id, e);
                         }
                     }
                 }
             }
             Message::Binary(_) => {
-                warn!("Received binary message from client {} - not supported", client_id);
+                shared::process_warn!(shared::ProcessId::current(), "Received binary message from client {} - not supported", client_id);
             }
             Message::Ping(_payload) => {
                 debug!("Received ping from client {}", client_id);
@@ -119,7 +119,7 @@ where
                 debug!("Received pong from client {}", client_id);
             }
             Message::Close(_) => {
-                info!("Client {} requested close", client_id);
+                shared::process_info!(shared::ProcessId::current(), "Client {} requested close", client_id);
                 break;
             }
         }
@@ -129,10 +129,10 @@ where
     outgoing_task.abort();
 
     if let Err(e) = websocket_manager.remove_client(client_id).await {
-        error!("Failed to remove client {}: {}", client_id, e);
+        shared::process_error!(shared::ProcessId::current(), "Failed to remove client {}: {}", client_id, e);
     }
 
-    info!("👋 WebSocket connection closed: {}", client_id);
+    shared::process_info!(shared::ProcessId::current(), "👋 WebSocket connection closed: {}", client_id);
 }
 
 /// Handle individual client request

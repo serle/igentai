@@ -235,7 +235,7 @@ where
                     state.routing_strategy = Some(routing_strategy);
                     state.generation_config = Some(generation_config);
                     state.start();
-                    process_info!("✅ Producer started with prompt: {}", prompt);
+                    process_info!(ProcessId::current(), "✅ Producer started with prompt: {}", prompt);
                 }
             }
 
@@ -294,6 +294,7 @@ where
         seen_values: Option<Vec<String>>,
     ) -> ProducerResult<()> {
         process_info!(
+            ProcessId::current(),
             "🔄 Processing SyncCheck: sync_id={}, bloom_version={:?}",
             sync_id,
             bloom_version
@@ -330,7 +331,7 @@ where
                     return Err(e);
                 }
             }
-            process_info!("✅ Sent SyncAck for sync_id={}", sync_id);
+            process_info!(ProcessId::current(), "✅ Sent SyncAck for sync_id={}", sync_id);
         }
 
         Ok(())

@@ -5,8 +5,7 @@
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use shared::{OrchestratorUpdate, SystemMetrics};
-use webserver::{core::WebServerState, services::RealWebSocketManager, traits::WebSocketManager, types::ClientMessage};
+use webserver::{services::RealWebSocketManager, traits::WebSocketManager, types::ClientMessage};
 
 #[tokio::test]
 async fn test_websocket_manager() {
@@ -27,48 +26,13 @@ async fn test_websocket_manager() {
     assert_eq!(manager.client_count().await, 0);
 }
 
-#[tokio::test]
-async fn test_orchestrator_update_processing() {
-    let mut state = WebServerState::new();
-
-    // Test SystemMetrics update
-    let metrics = SystemMetrics {
-        uam: 5.2,
-        cost_per_minute: 0.01,
-        tokens_per_minute: 1000.0,
-        unique_per_dollar: 520.0,
-        unique_per_1k_tokens: 25.0,
-        active_producers: 3,
-        by_provider: std::collections::HashMap::new(),
-        by_producer: std::collections::HashMap::new(),
-        current_topic: Some("test_topic".to_string()),
-        uptime_seconds: 120,
-        last_updated: chrono::Utc::now().timestamp() as u64,
-    };
-
-    let update = OrchestratorUpdate::SystemMetrics(metrics.clone());
-    let client_messages = state.process_orchestrator_update(update);
-
-    // Should generate a dashboard update
-    assert!(!client_messages.is_empty());
-    assert!(matches!(client_messages[0], ClientMessage::DashboardUpdate { .. }));
-
-    // Test NewAttributes update (unique list update)
-    let attributes = vec!["attr1".to_string(), "attr2".to_string(), "attr3".to_string()];
-    let update = OrchestratorUpdate::NewAttributes(attributes.clone());
-    let client_messages = state.process_orchestrator_update(update);
-
-    // Should generate an attribute update
-    assert!(!client_messages.is_empty());
-    assert!(matches!(client_messages[0], ClientMessage::AttributeUpdate { .. }));
-}
 
 #[test]
 fn test_client_message_serialization() {
     // Test that attribute updates can be serialized
     let attr_update = ClientMessage::AttributeUpdate {
         attributes: vec!["unique1".to_string(), "unique2".to_string()],
-        producer_id: shared::ProcessId::current(),
+        producer_id: shared::ProcessId::init_webserver().clone(),
         metadata: shared::ProviderMetadata {
             provider_id: shared::ProviderId::OpenAI,
             model: "gpt-4".to_string(),

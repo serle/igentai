@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::error::{WebServerError, WebServerResult};
@@ -38,8 +37,7 @@ impl RealWebSocketManager {
         }
     }
 
-    /// Clean up disconnected clients
-    #[allow(dead_code)]
+    /// Clean up disconnected clients   
     async fn cleanup_disconnected_clients(&self) {
         let mut clients = self.clients.write().await;
         let mut to_remove = Vec::new();
@@ -52,7 +50,7 @@ impl RealWebSocketManager {
 
         for client_id in to_remove {
             clients.remove(&client_id);
-            info!("🗑️ Cleaned up disconnected client {}", client_id);
+            shared::process_info!(shared::ProcessId::current(), "🗑️ Cleaned up disconnected client {}", client_id);
         }
     }
 }
@@ -71,7 +69,7 @@ impl WebSocketManager for RealWebSocketManager {
             clients.insert(client_id, connection);
         }
 
-        info!("👋 Added WebSocket client {}", client_id);
+        shared::process_info!(shared::ProcessId::current(), "👋 Added WebSocket client {}", client_id);
 
         // Send connection acknowledgment in the background to avoid test interference
         let clients_arc = self.clients.clone();
@@ -87,7 +85,7 @@ impl WebSocketManager for RealWebSocketManager {
                 };
 
                 if let Err(e) = connection.sender.try_send(ack_message) {
-                    warn!("Failed to send connection ack to {}: {:?}", client_id, e);
+                    shared::process_warn!(shared::ProcessId::current(), "Failed to send connection ack to {}: {:?}", client_id, e);
                 }
             }
         });
@@ -98,7 +96,7 @@ impl WebSocketManager for RealWebSocketManager {
     async fn remove_client(&self, client_id: Uuid) -> WebServerResult<()> {
         let mut clients = self.clients.write().await;
         if clients.remove(&client_id).is_some() {
-            info!("👋 Removed WebSocket client {}", client_id);
+            shared::process_info!(shared::ProcessId::current(), "👋 Removed WebSocket client {}", client_id);
         }
         Ok(())
     }
@@ -109,11 +107,11 @@ impl WebSocketManager for RealWebSocketManager {
             let clients = self.clients.read().await;
 
             if clients.is_empty() {
-                warn!("📭 No WebSocket clients connected - message not broadcasted");
+                shared::process_warn!(shared::ProcessId::current(), "📭 No WebSocket clients connected - message not broadcasted");
                 return Ok(());
             }
 
-            info!("📡 Preparing to broadcast message to {} clients", clients.len());
+            shared::process_info!(shared::ProcessId::current(), "📡 Preparing to broadcast message to {} clients", clients.len());
 
             clients
                 .iter()
@@ -131,7 +129,7 @@ impl WebSocketManager for RealWebSocketManager {
                     success_count += 1;
                 }
                 Err(mpsc::error::TrySendError::Full(_)) => {
-                    warn!("Client {} channel full, dropping message", client_id);
+                    shared::process_warn!(shared::ProcessId::current(), "Client {} channel full, dropping message", client_id);
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     failed_clients.push(client_id);
@@ -144,15 +142,15 @@ impl WebSocketManager for RealWebSocketManager {
             let mut clients = self.clients.write().await;
             for client_id in failed_clients {
                 if clients.remove(&client_id).is_some() {
-                    info!("🗑️ Removed disconnected client {} during broadcast", client_id);
+                    shared::process_info!(shared::ProcessId::current(), "🗑️ Removed disconnected client {} during broadcast", client_id);
                 }
             }
         }
 
         if success_count > 0 {
-            info!("✅ Successfully broadcasted message to {}/{} clients", success_count, total_clients);
+            shared::process_info!(shared::ProcessId::current(), "✅ Successfully broadcasted message to {}/{} clients", success_count, total_clients);
         } else {
-            warn!("❌ Failed to broadcast message to any clients");
+            shared::process_warn!(shared::ProcessId::current(), "❌ Failed to broadcast message to any clients");
         }
 
         Ok(())
@@ -177,7 +175,7 @@ impl WebSocketManager for RealWebSocketManager {
                     // Remove the disconnected client
                     let mut clients = self.clients.write().await;
                     if clients.remove(&client_id).is_some() {
-                        info!("🗑️ Removed disconnected client {} during individual send", client_id);
+                        shared::process_info!(shared::ProcessId::current(), "🗑️ Removed disconnected client {} during individual send", client_id);
                     }
                     return Err(WebServerError::websocket("Client disconnected".to_string()));
                 }
@@ -229,7 +227,7 @@ impl RealWebSocketManager {
                     for client_id in to_remove {
                         client_map.remove(&client_id);
                     }
-                    info!("🧹 Cleaned up {} disconnected clients", client_map.len());
+                    shared::process_info!(shared::ProcessId::current(), "🧹 Cleaned up {} disconnected clients", client_map.len());
                 }
             }
         })
