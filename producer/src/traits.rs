@@ -38,5 +38,5 @@ pub trait ApiClient: Send + Sync {
     async fn health_check(&self, provider: shared::ProviderId) -> ProducerResult<bool>;
 
     /// Get estimated cost for request
-    fn estimate_cost(&self, provider: shared::ProviderId, tokens: u32) -> f64;
+    fn estimate_cost(&self, provider: shared::ProviderId, tokens: &shared::TokenUsage) -> f64;
 }

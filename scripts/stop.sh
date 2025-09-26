@@ -33,5 +33,17 @@ else
     echo "⚠️  Some processes may still be running:"
     echo "$REMAINING"
     echo ""
-    echo "If needed, force kill with: pkill -9 -f \"orchestrator|producer|webserver\""
+    echo "Attempting force kill..."
+    pkill -9 -f "orchestrator|producer|webserver" 2>/dev/null || true
+    sleep 1
+    
+    # Final check
+    FINAL_CHECK=$(ps aux | grep -E "(orchestrator|producer|webserver)" | grep -v grep | grep -v stop.sh || true)
+    if [ -z "$FINAL_CHECK" ]; then
+        echo "✅ All processes forcefully stopped"
+    else
+        echo "❌ Some processes could not be stopped:"
+        echo "$FINAL_CHECK"
+        echo "You may need to restart your terminal or system"
+    fi
 fi

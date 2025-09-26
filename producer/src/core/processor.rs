@@ -51,18 +51,34 @@ impl Processor {
             return Ok(ProcessingStats::empty());
         }
 
-        // Split on any combination of spaces, newlines, tabs, and commas
+        // Split on newlines and commas, but preserve spaces within attribute names
         let extracted_items: Vec<String> = response.content
-            .split(|c: char| c.is_whitespace() || c == ',')
+            .split(|c: char| c == '\n' || c == '\r' || c == ',')
             .map(|item| {
-                // Clean up each item: trim, lowercase, remove non-alphanumeric
-                item.trim()
+                // Clean up each item: trim, lowercase, preserve spaces and letters only (exclude numbers)
+                let cleaned = item.trim()
                     .to_lowercase()
                     .chars()
-                    .filter(|c| c.is_alphanumeric())
-                    .collect::<String>()
+                    .filter(|c| c.is_alphabetic() || c.is_whitespace()) // Only letters and spaces, no numbers
+                    .collect::<String>();
+                
+                // Normalize multiple spaces to single spaces and trim
+                let normalized = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+                
+                // Remove any leading/trailing numbers or number patterns that might remain
+                normalized
+                    .split_whitespace()
+                    .filter(|word| !word.chars().all(|c| c.is_numeric())) // Remove pure number words
+                    .filter(|word| !word.starts_with(char::is_numeric)) // Remove words starting with numbers
+                    .collect::<Vec<_>>()
+                    .join(" ")
             })
-            .filter(|item| !item.is_empty() && item.len() > 1) // Keep only meaningful items
+            .filter(|item| {
+                !item.is_empty() 
+                && item.len() > 2 
+                && !item.chars().any(|c| c.is_numeric()) // Extra check: no numbers anywhere
+                && item.split_whitespace().count() <= 6 // Reasonable length limit for noun phrases
+            })
             .collect();
 
         // Process extracted items and check uniqueness (functional approach)

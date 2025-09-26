@@ -98,7 +98,7 @@ impl Metrics {
     /// Record an API response received
     pub fn record_response_received(&mut self, response: &ApiResponse) {
         self.current_metrics.responses_received += 1;
-        self.current_metrics.total_tokens_used += response.tokens_used as u64;
+        self.current_metrics.total_tokens_used += response.tokens_used.total();
 
         // Update response time tracking
         let response_time = Duration::from_millis(response.response_time_ms);
@@ -108,7 +108,7 @@ impl Metrics {
         let stats = self.provider_stats.entry(response.provider).or_default();
         stats.responses_received += 1;
         stats.total_response_time_ms += response.response_time_ms;
-        stats.total_tokens_used += response.tokens_used as u64;
+        stats.total_tokens_used += response.tokens_used.total();
 
         if response.success {
             stats.success_count += 1;
@@ -117,8 +117,9 @@ impl Metrics {
         }
 
         debug!(
-            "Recorded response from {:?}: {}ms, {} tokens, success: {}",
-            response.provider, response.response_time_ms, response.tokens_used, response.success
+            "Recorded response from {:?}: {}ms, {} tokens (input: {}, output: {}), success: {}",
+            response.provider, response.response_time_ms, response.tokens_used.total(),
+            response.tokens_used.input_tokens, response.tokens_used.output_tokens, response.success
         );
 
         self.recalculate_derived_metrics();

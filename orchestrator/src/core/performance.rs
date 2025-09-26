@@ -416,9 +416,9 @@ impl PerformanceTracker {
         models.insert(
             ProviderId::OpenAI,
             CostModel {
-                input_cost_per_1k: 0.03, // GPT-4 pricing
-                output_cost_per_1k: 0.06,
-                model_name: "gpt-4".to_string(),
+                input_cost_per_1k: 0.00015, // GPT-4o-mini pricing: $0.15/1M input tokens
+                output_cost_per_1k: 0.0006,  // GPT-4o-mini pricing: $0.60/1M output tokens
+                model_name: "gpt-4o-mini".to_string(),
             },
         );
 

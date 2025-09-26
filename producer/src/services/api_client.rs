@@ -8,7 +8,7 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use reqwest::Client;
 use serde_json::{json, Value};
-use shared::{process_debug, ProcessId, ProviderId};
+use shared::{process_debug, ProcessId, ProviderId, TokenUsage};
 use std::collections::HashMap;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -3370,23 +3370,35 @@ impl RealApiClient {
         }
     }
 
-    /// Extract token usage from provider response
-    fn extract_tokens(&self, provider: ProviderId, response: &Value) -> u32 {
+    /// Extract detailed token usage from provider response
+    fn extract_tokens(&self, provider: ProviderId, response: &Value) -> TokenUsage {
         match provider {
-            ProviderId::OpenAI => response["usage"]["total_tokens"].as_u64().unwrap_or(0) as u32,
+            ProviderId::OpenAI => {
+                let input_tokens = response["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+                let output_tokens = response["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+                TokenUsage { input_tokens, output_tokens }
+            }
             ProviderId::Anthropic => {
                 let input_tokens = response["usage"]["input_tokens"].as_u64().unwrap_or(0);
                 let output_tokens = response["usage"]["output_tokens"].as_u64().unwrap_or(0);
-                (input_tokens + output_tokens) as u32
+                TokenUsage { input_tokens, output_tokens }
             }
             ProviderId::Gemini => {
                 // Gemini doesn't always return token counts, estimate from content length
                 let content = self.extract_content(provider, response).unwrap_or_default();
-                (content.len() / 4) as u32 // Rough estimate: 4 characters per token
+                let total_estimate = (content.len() / 4) as u64; // Rough estimate: 4 characters per token
+                // Assume 80% input, 20% output for estimation
+                let input_tokens = (total_estimate as f64 * 0.8) as u64;
+                let output_tokens = total_estimate - input_tokens;
+                TokenUsage { input_tokens, output_tokens }
             }
             ProviderId::Random => {
                 // Random provider token usage estimation (roughly 1 token per word)
-                response["word_count"].as_u64().unwrap_or(100) as u32
+                let total_estimate = response["word_count"].as_u64().unwrap_or(100);
+                // Random provider: assume 50% input, 50% output for estimation
+                let input_tokens = total_estimate / 2;
+                let output_tokens = total_estimate - input_tokens;
+                TokenUsage { input_tokens, output_tokens }
             }
         }
     }
@@ -3428,7 +3440,7 @@ impl RealApiClient {
             provider: request.provider,
             request_id: request.request_id,
             content,
-            tokens_used: total_tokens,
+            tokens_used: TokenUsage { input_tokens: input_tokens as u64, output_tokens: output_tokens as u64 },
             response_time_ms,
             timestamp: chrono::Utc::now(),
             success: true,
@@ -3495,7 +3507,7 @@ impl ApiClient for RealApiClient {
                     provider: request.provider,
                     request_id: request.request_id,
                     content: String::new(),
-                    tokens_used: 0,
+                    tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
                     response_time_ms: start_time.elapsed().as_millis() as u64,
                     timestamp: chrono::Utc::now(),
                     success: false,
@@ -3515,7 +3527,7 @@ impl ApiClient for RealApiClient {
                 provider: request.provider,
                 request_id: request.request_id,
                 content: String::new(),
-                tokens_used: 0,
+                tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
                 response_time_ms,
                 timestamp: chrono::Utc::now(),
                 success: false,
@@ -3532,7 +3544,7 @@ impl ApiClient for RealApiClient {
                     provider: request.provider,
                     request_id: request.request_id,
                     content: String::new(),
-                    tokens_used: 0,
+                    tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
                     response_time_ms,
                     timestamp: chrono::Utc::now(),
                     success: false,
@@ -3550,7 +3562,7 @@ impl ApiClient for RealApiClient {
                     provider: request.provider,
                     request_id: request.request_id,
                     content: String::new(),
-                    tokens_used: 0,
+                    tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
                     response_time_ms,
                     timestamp: chrono::Utc::now(),
                     success: false,
@@ -3563,9 +3575,11 @@ impl ApiClient for RealApiClient {
 
         process_debug!(
             ProcessId::current(),
-            "✅ Received response from {:?}: {} tokens, {}ms",
+            "✅ Received response from {:?}: {} tokens (input: {}, output: {}), {}ms",
             request.provider,
-            tokens_used,
+            tokens_used.total(),
+            tokens_used.input_tokens,
+            tokens_used.output_tokens,
             response_time_ms
         );
 
@@ -3586,16 +3600,19 @@ impl ApiClient for RealApiClient {
         Ok(self.api_keys.contains_key(&provider))
     }
 
-    fn estimate_cost(&self, provider: ProviderId, tokens: u32) -> f64 {
+    fn estimate_cost(&self, provider: ProviderId, tokens: &TokenUsage) -> f64 {
         // Updated cost estimates (per 1K tokens) based on 2025 pricing
-        let cost_per_1k = match provider {
-            ProviderId::OpenAI => 0.00015,  // GPT-4o-2024-08-06 input tokens: $0.15/1M tokens
-            ProviderId::Anthropic => 0.003, // Claude-3.5 Sonnet input tokens: $3/1M tokens  
-            ProviderId::Gemini => 0.000075, // Gemini 2.5 Flash input tokens: $0.075/1M tokens
-            ProviderId::Random => 0.0001,   // Random provider minimal cost for testing
+        let (input_cost_per_1k, output_cost_per_1k) = match provider {
+            ProviderId::OpenAI => (0.00015, 0.0006),   // GPT-4o-mini: $0.15/1M input, $0.60/1M output
+            ProviderId::Anthropic => (0.003, 0.015),   // Claude-3.5 Sonnet: $3/1M input, $15/1M output  
+            ProviderId::Gemini => (0.000075, 0.0003),  // Gemini 2.5 Flash: $0.075/1M input, $0.30/1M output
+            ProviderId::Random => (0.0001, 0.0001),    // Random provider minimal cost for testing
         };
 
-        (tokens as f64 / 1000.0) * cost_per_1k
+        let input_cost = (tokens.input_tokens as f64 / 1000.0) * input_cost_per_1k;
+        let output_cost = (tokens.output_tokens as f64 / 1000.0) * output_cost_per_1k;
+        
+        input_cost + output_cost
     }
 }
 
@@ -3656,12 +3673,21 @@ mod tests {
     fn test_cost_estimation() {
         let client = RealApiClient::new(create_test_api_keys(), 30000);
 
-        assert_eq!(client.estimate_cost(ProviderId::OpenAI, 1000), 0.00015);
-        assert_eq!(client.estimate_cost(ProviderId::Anthropic, 1000), 0.003);
-        assert_eq!(client.estimate_cost(ProviderId::Gemini, 1000), 0.000075);
+        let tokens_1k_input = TokenUsage { input_tokens: 1000, output_tokens: 0 };
+        let tokens_1k_output = TokenUsage { input_tokens: 0, output_tokens: 1000 };
+        let tokens_mixed = TokenUsage { input_tokens: 500, output_tokens: 500 };
+        
+        // Test input-only costs
+        assert_eq!(client.estimate_cost(ProviderId::OpenAI, &tokens_1k_input), 0.00015);
+        assert_eq!(client.estimate_cost(ProviderId::Anthropic, &tokens_1k_input), 0.003);
+        assert_eq!(client.estimate_cost(ProviderId::Gemini, &tokens_1k_input), 0.000075);
 
-        // Test fractional tokens
-        assert_eq!(client.estimate_cost(ProviderId::OpenAI, 500), 0.000075);
+        // Test output-only costs (higher rates)
+        assert_eq!(client.estimate_cost(ProviderId::OpenAI, &tokens_1k_output), 0.0006);
+        
+        // Test mixed input/output costs
+        let expected_openai_mixed = (500.0 / 1000.0) * 0.00015 + (500.0 / 1000.0) * 0.0006;
+        assert!((client.estimate_cost(ProviderId::OpenAI, &tokens_mixed) - expected_openai_mixed).abs() < 0.000001);
     }
 
     #[tokio::test]
@@ -3733,16 +3759,21 @@ mod tests {
         // Test OpenAI usage format
         let openai_response = json!({
             "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
                 "total_tokens": 150
             }
         });
 
         let tokens = client.extract_tokens(ProviderId::OpenAI, &openai_response);
-        assert_eq!(tokens, 150);
+        assert_eq!(tokens.input_tokens, 100);
+        assert_eq!(tokens.output_tokens, 50);
+        assert_eq!(tokens.total(), 150);
 
         // Test missing usage (should return 0)
         let empty_response = json!({});
         let tokens = client.extract_tokens(ProviderId::OpenAI, &empty_response);
-        assert_eq!(tokens, 0);
+        assert_eq!(tokens.input_tokens, 0);
+        assert_eq!(tokens.output_tokens, 0);
     }
 }

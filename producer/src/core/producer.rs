@@ -480,7 +480,7 @@ where
             metrics_guard.record_response_received(&response);
 
             if response.success {
-                let cost = api_client.estimate_cost(provider_config.provider, response.tokens_used);
+                let cost = api_client.estimate_cost(provider_config.provider, &response.tokens_used);
                 metrics_guard.record_cost(provider_config.provider, cost);
             }
         }
@@ -584,19 +584,7 @@ where
                 provider_id: provider,
                 model: format!("{provider:?}-model").to_lowercase(),
                 response_time_ms: api_response.response_time_ms,
-                tokens: shared::types::TokenUsage {
-                    // For Random provider, calculate realistic split; for others, rough split
-                    input_tokens: if provider == shared::ProviderId::Random {
-                        (api_response.request_id.to_string().len() / 4) as u64 // Based on prompt length
-                    } else {
-                        (api_response.tokens_used / 3) as u64 // Input is typically smaller
-                    },
-                    output_tokens: if provider == shared::ProviderId::Random {
-                        api_response.tokens_used as u64 - (api_response.request_id.to_string().len() / 4) as u64
-                    } else {
-                        ((api_response.tokens_used * 2) / 3) as u64 // Output is typically larger
-                    },
-                },
+                tokens: api_response.tokens_used.clone(),
                 request_timestamp: api_response.timestamp.timestamp_millis() as u64,
             },
         };

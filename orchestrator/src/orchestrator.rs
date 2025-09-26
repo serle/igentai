@@ -474,9 +474,15 @@ where
             .mark_producer_ready(producer_id.clone(), producer_addr)
             .await?;
 
+        // Update producer status in state
+        {
+            let mut state = self.state.lock().await;
+            state.update_producer_status(producer_id.clone(), shared::ProcessStatus::Running);
+        }
+
         process_debug!(
             ProcessId::current(),
-            "🚀 Producer {} ready on port {}",
+            "🚀 Producer {} ready on port {} - marked as running",
             producer_id,
             listen_port
         );
@@ -583,12 +589,20 @@ where
             &shared::RoutingStrategy::Weighted { weights: HashMap::new() }, // Default fallback
         ).await;
 
-        // Update state with resolved routing strategy
+        // Update state with resolved routing strategy and initialize producers
         {
             let mut state = self.state.lock().await;
             state.start_generation(topic.clone(), optimization_mode, constraints);
             // Set the resolved routing strategy as the topic-level strategy
             state.context.routing_strategy = resolved_routing_strategy.clone();
+            
+            // Initialize producer tracking - add expected producers as Starting
+            for i in 0..producer_count {
+                let producer_id = shared::ProcessId::Producer(i + 1);
+                state.add_producer(producer_id, i + 1, shared::ProcessStatus::Starting);
+            }
+            
+            process_debug!(ProcessId::current(), "🏭 Initialized {} producer slots in state", producer_count);
         }
 
         // Generate initial prompt and configuration with custom request_size

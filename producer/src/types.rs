@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use shared::{OptimizationMode, ProviderId};
+use shared::{OptimizationMode, ProviderId, TokenUsage};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use uuid::Uuid;
@@ -54,7 +54,7 @@ pub struct ApiResponse {
     pub provider: ProviderId,
     pub request_id: Uuid,
     pub content: String,
-    pub tokens_used: u32,
+    pub tokens_used: TokenUsage,
     pub response_time_ms: u64,
     pub timestamp: DateTime<Utc>,
     pub success: bool,

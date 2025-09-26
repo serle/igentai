@@ -260,19 +260,23 @@ impl Optimizer {
         let base_prompt = match partitioning {
             PartitioningStrategy::None => {
                 format!(
-                    "Generate highly unique and specific attributes for '{topic}'. \
-                    Focus on originality, avoid common responses, and ensure each attribute \
-                    is distinctive and measurable. Provide creative and unexpected perspectives. \
-                    IMPORTANT: Provide all results in English only, translating any foreign language terms to English."
+                    "Generate highly specific, unique nouns and noun phrases for '{topic}'. \
+                    Each attribute must be a concrete thing, object, component, or feature (e.g., 'steel support beam', 'marble entrance hall', 'control panel'). \
+                    Focus on specific parts, components, materials, structures, or distinctive elements that exist within or relate to this topic. \
+                    Avoid adjectives, descriptions, and numbers - only generate actual things/nouns using words only. Think like an expert cataloging specific items. \
+                    Output one noun/noun phrase per line. \
+                    IMPORTANT: Do not include any numbers, measurements, or quantities. Provide all results in English only, translating any foreign language terms to English."
                 )
             }
 
             PartitioningStrategy::Semantic { categories } => {
                 format!(
-                    "Generate unique attributes for '{}' focusing specifically on: {}. \
-                    Be creative within your assigned categories, avoid generic responses, \
-                    and ensure high originality in your assigned domains. \
-                    IMPORTANT: Provide all results in English only, translating any foreign language terms to English.",
+                    "Generate unique, specific nouns and noun phrases for '{}' focusing on: {}. \
+                    Each result must be a concrete thing, object, or component (e.g., 'bronze door handle', 'security camera system', 'ceramic floor tile'). \
+                    Be an expert in your assigned categories - identify specific items, parts, materials, or structures. \
+                    Focus on distinctive, specific objects that only an expert would identify. Avoid descriptions and numbers - only concrete nouns using words only. \
+                    Output one noun/noun phrase per line. \
+                    IMPORTANT: Do not include any numbers, measurements, or quantities. Provide all results in English only, translating any foreign language terms to English.",
                     topic,
                     categories.join(", ")
                 )
@@ -280,21 +284,27 @@ impl Optimizer {
 
             PartitioningStrategy::AttributeType { types } => {
                 format!(
-                    "Generate unique attributes for '{}' of these specific types: {}. \
-                    Focus on your assigned attribute types, be highly specific and creative, \
-                    ensure each attribute is unique within your specialization. \
-                    IMPORTANT: Provide all results in English only, translating any foreign language terms to English.",
+                    "Generate unique nouns and noun phrases for '{}' of these specific types: {}. \
+                    Each result must be a concrete thing, object, component, or material (e.g., 'titanium alloy bracket', 'handwoven fabric panel', 'indicator light'). \
+                    Be extremely specific within your assigned types - identify actual parts, components, materials, or structures. \
+                    Focus on unique items, specialized equipment, specific materials, or technical components. \
+                    Avoid descriptions and numbers - only generate concrete nouns using words only. \
+                    Output one noun/noun phrase per line. \
+                    IMPORTANT: Do not include any numbers, measurements, or quantities. Provide all results in English only, translating any foreign language terms to English.",
                     topic,
                     types.join(", ")
                 )
             }
 
             PartitioningStrategy::ProviderSpecific { specializations: _ } => {
-                // This will be customized per provider
                 format!(
-                    "Generate unique attributes for '{topic}' leveraging your specific capabilities. \
-                    Focus on areas where you excel, ensure maximum creativity and uniqueness. \
-                    IMPORTANT: Provide all results in English only, translating any foreign language terms to English."
+                    "Generate unique, detailed nouns and noun phrases for '{topic}' using your specialized knowledge. \
+                    Each result must be a concrete thing, object, or component (e.g., 'ventilation duct', 'control circuit board', 'decorative molding strip'). \
+                    Leverage your unique perspective to identify specific items, parts, materials, or structures that showcase deep understanding. \
+                    Focus on actual objects, technical components, materials, or structural elements. \
+                    Be creative and authoritative - identify things others would miss. Avoid numbers and measurements - use words only. \
+                    Output one noun/noun phrase per line. \
+                    IMPORTANT: Do not include any numbers, measurements, or quantities. Provide all results in English only, translating any foreign language terms to English."
                 )
             }
         };
@@ -302,11 +312,18 @@ impl Optimizer {
         // Add performance-based modifications
         let enhanced_prompt = if analysis.overall_score < 0.5 {
             format!(
-                "{base_prompt}. IMPORTANT: Prioritize uniqueness over quantity - generate fewer but \
-                highly distinctive attributes rather than many similar ones."
+                "{base_prompt}\n\nCRITICAL: You are generating too many duplicates. Focus on EXTREME UNIQUENESS of NOUNS/OBJECTS. \
+                Think of obscure components, specialized parts, specific materials, technical equipment, \
+                structural elements, hidden components, or expert-level items that others would miss. \
+                Remember: ONLY concrete nouns/objects - no adjectives or descriptions. Quality over quantity is essential."
             )
         } else {
-            base_prompt
+            format!(
+                "{base_prompt}\n\nFocus on maintaining high uniqueness by identifying different types of objects: \
+                structural components, specialized materials, technical equipment, hidden parts, \
+                specific tools, unique elements, or expert-level items. \
+                Remember: Each result must be a concrete noun or noun phrase - an actual thing that exists."
+            )
         };
 
         Ok(enhanced_prompt)
