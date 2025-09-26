@@ -127,6 +127,7 @@ pub struct ProducerState {
     pub last_activity: Option<Instant>,
     pub last_sync_version: Option<u64>, // Last bloom filter version sent
     pub consecutive_failures: u32,
+    pub started_for_current_topic: bool, // Track if producer has been sent Start command for current topic
 }
 
 impl OrchestratorState {
@@ -172,6 +173,7 @@ impl OrchestratorState {
                 last_activity: None,
                 last_sync_version: None,
                 consecutive_failures: 0,
+                started_for_current_topic: false,
             };
             self.producers.insert(producer_id, producer_state);
         }
@@ -509,6 +511,7 @@ impl OrchestratorState {
             last_activity: Some(Instant::now()),
             last_sync_version: None,
             consecutive_failures: 0,
+            started_for_current_topic: false,
         };
         self.producers.insert(producer_id, producer_state);
     }
@@ -545,6 +548,20 @@ impl OrchestratorState {
         if let Some(producer) = self.producers.get_mut(&producer_id) {
             producer.status = status;
         }
+    }
+
+    /// Mark producer as started for current topic
+    pub fn mark_producer_started(&mut self, producer_id: ProcessId) {
+        if let Some(producer) = self.producers.get_mut(&producer_id) {
+            producer.started_for_current_topic = true;
+        }
+    }
+
+    /// Check if producer has been started for current topic
+    pub fn is_producer_started(&self, producer_id: &ProcessId) -> bool {
+        self.producers.get(producer_id)
+            .map(|p| p.started_for_current_topic)
+            .unwrap_or(false)
     }
 
     /// Remove a failed producer from tracking

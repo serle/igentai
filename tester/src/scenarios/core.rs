@@ -85,3 +85,44 @@ pub async fn healing(
 
     Ok(())
 }
+
+/// Test that producers receive exactly one Start command per topic (prevents duplicate starts bug)
+pub async fn single_start_command(
+    collector: TracingCollector,
+    constellation: &mut ServiceConstellation,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("🧪 Single Start Command: producers get exactly one start command");
+
+    let config = OrchestratorConfig::builder()
+        .topic("single_start_test")
+        .producers(3)
+        .iterations(Some(10)) // Enough iterations to catch duplicate start commands
+        .build();
+
+    constellation.start_orchestrator(config).await?;
+
+    if let Some(topic) = Topic::wait_for_topic("single_start_test", collector, Duration::from_secs(45)).await {
+        // Core assertions
+        assert!(
+            topic.assert_started_with_budget(Some(10)).await,
+            "Should start with budget"
+        );
+        assert!(topic.assert_completed().await, "Should complete");
+        
+        // NEW: Critical assertion to prevent duplicate start commands
+        assert!(
+            topic.assert_single_start_per_producer(3).await,
+            "Each producer should receive exactly one Start command"
+        );
+        
+        // Verify proper operation despite single start
+        assert!(topic.assert_min_attributes(50), "Should generate attributes with single start");
+        assert!(topic.assert_no_errors().await, "Should complete without errors");
+        
+        tracing::info!("✅ Single Start Command: PASSED");
+    } else {
+        return Err("Single Start Command test failed".into());
+    }
+
+    Ok(())
+}

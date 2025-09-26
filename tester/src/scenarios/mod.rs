@@ -38,6 +38,7 @@ impl TestScenarios {
             "basic" => core::basic(collector, constellation).await,
             "load" => core::load(collector, constellation).await,
             "healing" => core::healing(collector, constellation).await,
+            "single_start" => core::single_start_command(collector, constellation).await,
 
             // Web/HTTP interface tests
             "server" => web::server(collector, constellation).await,
@@ -52,7 +53,9 @@ impl TestScenarios {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 core::load(collector.clone(), constellation).await?;
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                core::healing(collector, constellation).await
+                core::healing(collector.clone(), constellation).await?;
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                core::single_start_command(collector, constellation).await
             }
 
             // Run all tests
@@ -65,6 +68,8 @@ impl TestScenarios {
                 core::load(collector.clone(), constellation).await?;
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 core::healing(collector.clone(), constellation).await?;
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                core::single_start_command(collector.clone(), constellation).await?;
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
                 // Edge cases
@@ -93,7 +98,7 @@ impl TestScenarios {
     pub fn available_scenarios() -> Vec<&'static str> {
         vec![
             // Individual tests
-            "basic", "load", "healing", // Core functionality
+            "basic", "load", "healing", "single_start", // Core functionality
             "server",  // Web interface
             "minimal", "empty", // Edge cases
             // Test suites

@@ -16,8 +16,10 @@ pub use core::{AnalyticsEngine, WebServerState};
 pub use error::{WebServerError, WebServerResult};
 pub use traits::{OrchestratorClient, StaticFileServer, WebSocketManager};
 
+use std::mem;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
 
@@ -37,7 +39,7 @@ where
     W: WebSocketManager + Send + Sync + 'static,
     S: StaticFileServer + Send + Sync + 'static,
 {
-    orchestrator_client: Arc<tokio::sync::Mutex<O>>,
+    orchestrator_client: Arc<Mutex<O>>,
     websocket_manager: Arc<W>,
     static_server: Arc<S>,
 }
@@ -130,7 +132,7 @@ where
             // Create a dummy receiver that will never receive messages but keeps sender alive
             let (tx, rx) = mpsc::channel(1);
             // Keep the sender alive by storing it
-            std::mem::forget(tx);
+            mem::forget(tx);
             rx
         } else {
             // Initialize orchestrator connection
@@ -161,7 +163,7 @@ where
                                 e
                             );
                             let (tx, rx) = mpsc::channel(1);
-                            std::mem::forget(tx);
+                            mem::forget(tx);
                             rx
                         }
                     }
@@ -173,7 +175,7 @@ where
                         e
                     );
                     let (tx, rx) = mpsc::channel(1);
-                    std::mem::forget(tx);
+                    mem::forget(tx);
                     rx
                 }
             }
@@ -181,7 +183,7 @@ where
 
         // Start HTTP server
         let app = self.create_axum_app();
-        let listener = tokio::net::TcpListener::bind(&http_addr)
+        let listener = TcpListener::bind(&http_addr)
             .await
             .map_err(|e| WebServerError::http(format!("Failed to bind to {}: {}", http_addr, e)))?;
 

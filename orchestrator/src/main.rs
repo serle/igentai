@@ -129,7 +129,9 @@ async fn main() -> OrchestratorResult<()> {
         RealFileSystem::new()
     };
 
-    let process_manager = RealProcessManager::with_trace_endpoint(args.trace_ep.clone());
+    let process_manager = RealProcessManager::new()
+        .with_trace_endpoint(args.trace_ep.clone())
+        .with_log_level(args.log_level.clone());
 
     // Create orchestrator with dependency injection
     let mut orchestrator = Orchestrator::new(api_keys, communicator, file_system, process_manager);

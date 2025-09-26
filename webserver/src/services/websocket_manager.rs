@@ -3,9 +3,13 @@
 //! Manages WebSocket connections and broadcasting to browser clients
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::task::JoinHandle;
+use tokio::time::{sleep, interval, Duration};
 use uuid::Uuid;
 
 use crate::error::{WebServerError, WebServerResult};
@@ -19,7 +23,7 @@ struct ClientConnection {
     id: Uuid,
     sender: mpsc::Sender<ClientMessage>,
     #[allow(dead_code)]
-    connected_at: chrono::DateTime<chrono::Utc>,
+    connected_at: DateTime<Utc>,
 }
 
 /// Real WebSocket manager implementation
@@ -61,7 +65,7 @@ impl WebSocketManager for RealWebSocketManager {
         let connection = ClientConnection {
             id: client_id,
             sender,
-            connected_at: chrono::Utc::now(),
+            connected_at: Utc::now(),
         };
 
         {
@@ -75,13 +79,13 @@ impl WebSocketManager for RealWebSocketManager {
         let clients_arc = self.clients.clone();
         tokio::spawn(async move {
             // Small delay to ensure the client is fully registered
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
 
             let clients = clients_arc.read().await;
             if let Some(connection) = clients.get(&client_id) {
                 let ack_message = ClientMessage::ConnectionAck {
                     session_id: client_id,
-                    server_time: chrono::Utc::now().timestamp() as u64,
+                    server_time: Utc::now().timestamp() as u64,
                 };
 
                 if let Err(e) = connection.sender.try_send(ack_message) {
@@ -128,10 +132,10 @@ impl WebSocketManager for RealWebSocketManager {
                 Ok(_) => {
                     success_count += 1;
                 }
-                Err(mpsc::error::TrySendError::Full(_)) => {
+                Err(TrySendError::Full(_)) => {
                     shared::process_warn!(shared::ProcessId::current(), "Client {} channel full, dropping message", client_id);
                 }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(TrySendError::Closed(_)) => {
                     failed_clients.push(client_id);
                 }
             }
@@ -168,10 +172,10 @@ impl WebSocketManager for RealWebSocketManager {
                 Ok(_) => {
                     return Ok(());
                 }
-                Err(mpsc::error::TrySendError::Full(_)) => {
+                Err(TrySendError::Full(_)) => {
                     return Err(WebServerError::websocket("Client channel full".to_string()));
                 }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(TrySendError::Closed(_)) => {
                     // Remove the disconnected client
                     let mut clients = self.clients.write().await;
                     if clients.remove(&client_id).is_some() {
@@ -205,11 +209,11 @@ impl Default for RealWebSocketManager {
 // Background task to periodically clean up disconnected clients
 impl RealWebSocketManager {
     /// Start background cleanup task
-    pub fn start_cleanup_task(&self) -> tokio::task::JoinHandle<()> {
+    pub fn start_cleanup_task(&self) -> JoinHandle<()> {
         let clients = self.clients.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            let mut interval = interval(Duration::from_secs(30));
 
             loop {
                 interval.tick().await;

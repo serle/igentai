@@ -9,7 +9,9 @@ use axum::{
     },
     response::Response,
 };
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use serde_json;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -97,7 +99,7 @@ where
                             level: crate::types::AlertLevel::Error,
                             title: "Invalid Request".to_string(),
                             message: format!("Failed to parse request: {}", e),
-                            timestamp: chrono::Utc::now().timestamp() as u64,
+                            timestamp: Utc::now().timestamp() as u64,
                             dismissible: true,
                         };
 

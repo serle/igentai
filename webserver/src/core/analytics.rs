@@ -3,6 +3,7 @@
 //! Pure business logic for analyzing metrics and generating insights
 
 use chrono::{Duration, Utc};
+use std::collections::HashMap;
 
 use crate::core::state::TimestampedMetrics;
 use crate::types::{InsightType, OptimizationInsight, TrendDirection};
@@ -386,8 +387,8 @@ mod tests {
             unique_per_dollar: 20.0,
             tokens_per_minute: 1000.0,
             unique_per_1k_tokens: 10.0,
-            by_producer: std::collections::HashMap::new(),
-            by_provider: std::collections::HashMap::new(),
+            by_producer: HashMap::new(),
+            by_provider: HashMap::new(),
             active_producers: 1,
             current_topic: Some("test".to_string()),
             uptime_seconds: 3600,

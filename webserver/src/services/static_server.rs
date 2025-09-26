@@ -4,8 +4,9 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::{fs, io};
 use std::path::{Path, PathBuf};
-use tokio::fs;
+use tokio::fs as async_fs;
 
 use crate::error::{WebServerError, WebServerResult};
 use crate::traits::{StaticFileResponse, StaticFileServer};
@@ -129,7 +130,7 @@ impl StaticFileServer for RealStaticFileServer {
         }
 
         // Read file content
-        match fs::read(&file_path).await {
+        match async_fs::read(&file_path).await {
             Ok(content) => {
                 let content_type = self.get_mime_type(path);
                 let cache_control = self.get_cache_control(path);
@@ -164,8 +165,8 @@ impl StaticFileServer for RealStaticFileServer {
     async fn list_files(&self) -> WebServerResult<Vec<String>> {
         let mut files = Vec::new();
 
-        fn collect_files(dir: &Path, base: &Path, files: &mut Vec<String>) -> std::io::Result<()> {
-            let entries = std::fs::read_dir(dir)?;
+        fn collect_files(dir: &Path, base: &Path, files: &mut Vec<String>) -> io::Result<()> {
+            let entries = fs::read_dir(dir)?;
 
             for entry in entries {
                 let entry = entry?;

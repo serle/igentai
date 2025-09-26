@@ -720,8 +720,8 @@ where
         let mut state = self.state.lock().await;
         state.update_producer_status(producer_id.clone(), status);
 
-        // If producer is now running and we have an active topic, heal the producer
-        if status == ProcessStatus::Running {
+        // Only send start command to producers that are running but haven't been started for current topic yet
+        if status == ProcessStatus::Running && !state.is_producer_started(&producer_id) {
             if let Some(topic) = &state.context.topic {
                 // Generate and send start command to heal the producer
                 let optimizer = state.get_optimizer();
@@ -740,10 +740,13 @@ where
 
                     process_debug!(
                         ProcessId::current(),
-                        "📋 Sending start command to producer {} for topic '{}'",
+                        "📋 Sending start command to producer {} for topic '{}' (first time)",
                         producer_id,
                         topic
                     );
+
+                    // Mark producer as started for current topic
+                    state.mark_producer_started(producer_id.clone());
 
                     // Drop the state lock before async call
                     drop(state);
@@ -763,7 +766,7 @@ where
                     } else {
                         process_debug!(
                             ProcessId::current(),
-                            "✅ Start command sent to producer {}",
+                            "✅ Start command sent to producer {} for first time",
                             producer_id
                         );
                     }

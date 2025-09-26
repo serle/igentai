@@ -16,9 +16,9 @@ async fn test_random_provider_basic() {
     let health = api_client.health_check(ProviderId::Random).await.unwrap();
     assert!(health, "Random provider should always be healthy");
 
-    // Test cost estimation
+    // Test cost estimation (100 tokens should cost 100/1000 * 0.0001 = 0.00001)
     let cost = api_client.estimate_cost(ProviderId::Random, 100);
-    assert_eq!(cost, 0.0, "Random provider should be free");
+    assert_eq!(cost, 0.00001, "Random provider should have minimal cost for testing");
 }
 
 #[tokio::test]

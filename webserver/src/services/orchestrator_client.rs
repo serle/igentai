@@ -154,21 +154,26 @@ impl OrchestratorClient for RealOrchestratorClient {
                 bind_addr
             );
 
-            // Mark as connected (ready to receive updates)
-            *self.connection.connected.write().await = true;
+            // Don't mark as connected yet - wait for orchestrator to actually connect
 
             // Start listener task
             let tx = self
                 .update_tx
                 .clone()
                 .ok_or_else(|| WebServerError::communication("Update sender not available".to_string()))?;
+            let connected = self.connection.connected.clone();
 
             tokio::spawn(async move {
                 loop {
                     match listener.accept().await {
                         Ok((mut stream, addr)) => {
                             debug!("📥 Accepted connection from {}", addr);
+                            
+                            // Mark as connected when orchestrator connects
+                            *connected.write().await = true;
+                            
                             let tx = tx.clone();
+                            let connected_inner = connected.clone();
 
                             // Handle each connection in a separate task
                             tokio::spawn(async move {
@@ -181,6 +186,8 @@ impl OrchestratorClient for RealOrchestratorClient {
                                     }
                                     Err(e) => {
                                         shared::process_error!(shared::ProcessId::current(), "❌ Failed to read update: {}", e);
+                                        // Mark as disconnected on communication error
+                                        *connected_inner.write().await = false;
                                     }
                                 }
                             });

@@ -3312,10 +3312,10 @@ impl RealApiClient {
         let word_count = content.split_whitespace().count() as u32;
         let response_time_ms = start_time.elapsed().as_millis() as u64;
 
-        // Simulate realistic token usage for input/output
+        // Simulate realistic token usage for input/output, respecting max_tokens limit
         let input_tokens = (request.prompt.len() / 4) as u32; // Rough estimate: 4 chars per token
         let output_tokens = word_count;
-        let total_tokens = input_tokens + output_tokens;
+        let total_tokens = std::cmp::min(input_tokens + output_tokens, request.max_tokens);
 
         info!(
             "🎲 Generated {} words (input: {} tokens, output: {} tokens, total: {}) in {}ms",
@@ -3488,7 +3488,7 @@ impl ApiClient for RealApiClient {
             ProviderId::OpenAI => 0.0015,   // GPT-4o-mini updated pricing
             ProviderId::Anthropic => 0.003, // Claude-3-Sonnet updated pricing
             ProviderId::Gemini => 0.0005,   // Gemini Pro updated pricing
-            ProviderId::Random => 0.0001,   // Random provider minimal cost for testing
+            ProviderId::Random => 0.0001,   // Random provider minimal cost for testing cost calculations
         };
 
         (tokens as f64 / 1000.0) * cost_per_1k

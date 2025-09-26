@@ -294,6 +294,24 @@ impl Topic {
         }
     }
 
+    /// Assert that each producer received exactly one Start command (prevents duplicate starts)
+    pub async fn assert_single_start_per_producer(&self, producer_count: usize) -> bool {
+        let result = self
+            .assertions
+            .assert_producers_single_start_command(&self.name, producer_count, Duration::from_secs(10))
+            .await;
+        if result.success {
+            tracing::info!("✅ {}", result.message);
+            true
+        } else {
+            tracing::error!("❌ {}", result.message);
+            if let Some(details) = &result.details {
+                tracing::error!("   Details: {}", details);
+            }
+            false
+        }
+    }
+
     // === Utility Methods ===
 
     /// Print summary of topic execution

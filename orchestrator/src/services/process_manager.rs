@@ -28,6 +28,9 @@ pub struct RealProcessManager {
 
     /// Optional tracing endpoint to pass to spawned processes
     trace_endpoint: Option<String>,
+
+    /// Log level to pass to spawned processes
+    log_level: String,
 }
 
 /// Handle for a managed process
@@ -53,34 +56,33 @@ enum ProcessType {
 }
 
 impl RealProcessManager {
-    /// Create new process manager
+    /// Create new process manager with default settings
     pub fn new() -> Self {
         Self {
             active_producers: tokio::sync::Mutex::new(HashMap::new()),
             active_webserver: tokio::sync::Mutex::new(None),
             next_port: Arc::new(Mutex::new(9000)), // Start ports from 9000 to avoid conflicts
             trace_endpoint: None,
+            log_level: "info".to_string(), // Default log level
         }
     }
 
-    /// Create new process manager with tracing endpoint
-    pub fn with_trace_endpoint(trace_endpoint: Option<String>) -> Self {
-        Self {
-            active_producers: tokio::sync::Mutex::new(HashMap::new()),
-            active_webserver: tokio::sync::Mutex::new(None),
-            next_port: Arc::new(Mutex::new(9000)),
-            trace_endpoint,
-        }
+    /// Configure tracing endpoint (fluent API)
+    pub fn with_trace_endpoint(mut self, trace_endpoint: Option<String>) -> Self {
+        self.trace_endpoint = trace_endpoint;
+        self
     }
 
-    /// Create with custom base port
-    pub fn with_base_port(base_port: u16) -> Self {
-        Self {
-            active_producers: tokio::sync::Mutex::new(HashMap::new()),
-            active_webserver: tokio::sync::Mutex::new(None),
-            next_port: Arc::new(Mutex::new(base_port)),
-            trace_endpoint: None,
-        }
+    /// Configure log level (fluent API)
+    pub fn with_log_level(mut self, log_level: String) -> Self {
+        self.log_level = log_level;
+        self
+    }
+
+    /// Configure base port (fluent API)
+    pub fn with_base_port(mut self, base_port: u16) -> Self {
+        self.next_port = Arc::new(Mutex::new(base_port));
+        self
     }
 
     /// Get next available port
@@ -122,6 +124,9 @@ impl RealProcessManager {
         if let Some(ref trace_ep) = self.trace_endpoint {
             cmd.arg("--trace-ep").arg(trace_ep);
         }
+
+        // Add log level
+        cmd.arg("--log-level").arg(&self.log_level);
 
         // Only pass CLI arguments when in CLI mode (when spawned from orchestrator CLI mode)
         // In production mode, configuration comes through IPC Start message
@@ -285,8 +290,8 @@ impl ProcessManager for RealProcessManager {
             cmd.arg("--trace-ep").arg(trace_ep);
         }
 
-        // Add log level for debugging
-        cmd.arg("--log-level").arg("debug");
+        // Add log level
+        cmd.arg("--log-level").arg(&self.log_level);
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
 
@@ -451,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_port_allocation() {
-        let manager = RealProcessManager::with_base_port(10000);
+        let manager = RealProcessManager::new().with_base_port(10000);
 
         // First port should be the base port
         let port1 = manager.get_next_port().await;

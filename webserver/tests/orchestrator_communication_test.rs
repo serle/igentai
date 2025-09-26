@@ -2,7 +2,9 @@
 //!
 //! Tests IPC protocol, message handling, and error scenarios
 
+use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::sync::{Mutex, mpsc};
 
 use shared::{OrchestratorUpdate, WebServerRequest};
@@ -15,8 +17,8 @@ use webserver::{
 async fn test_orchestrator_client_listener_failure() {
     // Try to use an already occupied port or invalid bind address
     // First bind to a port, then try to bind to the same port again
-    let test_addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let _listener = tokio::net::TcpListener::bind(test_addr).await.unwrap();
+    let test_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let _listener = TcpListener::bind(test_addr).await.unwrap();
     let occupied_addr = _listener.local_addr().unwrap();
 
     let orchestrator_addr = "127.0.0.1:9999".parse().unwrap();

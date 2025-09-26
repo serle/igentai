@@ -403,6 +403,112 @@ impl TracingAssertions {
             )
         }
     }
+
+    /// Assert that each producer receives exactly one Start command per topic
+    /// This prevents the bug where producers get repeated Start commands
+    pub async fn assert_producers_single_start_command(
+        &self,
+        topic: &str,
+        producer_count: usize,
+        timeout: Duration,
+    ) -> AssertionResult {
+        tracing::info!(
+            "🚀 Asserting {} producers each receive exactly one Start command for topic '{}'",
+            producer_count,
+            topic
+        );
+
+        // Wait for all producers to receive their start commands
+        let start_command_message = format!("Sending start command to producer");
+        let found = self.collector.wait_for_message(&start_command_message, timeout).await;
+
+        if !found {
+            return AssertionResult::failure(
+                "No start commands found within timeout".to_string(),
+                Some(format!("Expected {} start commands for topic '{}'", producer_count, topic)),
+            );
+        }
+
+        // Query for all start command events (look for the "first time" pattern from our fix)
+        let query = TraceQuery {
+            process_filter: Some("orchestrator".to_string()),
+            message_contains: Some(format!("Sending start command to producer")),
+            level_filter: None,
+            since_seconds_ago: Some(60), // Look at last minute
+            limit: None,
+        };
+        
+        let start_command_events = self.collector.query(&query);
+
+        // Filter events for this specific topic and ensure they are "first time" starts
+        let topic_start_events: Vec<_> = start_command_events
+            .iter()
+            .filter(|event| {
+                event.trace_event.message.contains(&format!("for topic '{}'", topic)) &&
+                event.trace_event.message.contains("(first time)")
+            })
+            .collect();
+
+        // If no "first time" events found, this indicates the fix is working correctly!
+        // The test should pass when we see exactly producer_count "first time" start commands.
+
+        let expected_count = producer_count;
+        let actual_count = topic_start_events.len();
+
+        if actual_count == expected_count {
+            // Check that each producer got exactly one start command
+            let mut producer_start_counts = std::collections::HashMap::new();
+            
+            for event in &topic_start_events {
+                // Extract producer ID from message like "Sending start command to producer producer_1"
+                if let Some(producer_part) = event.trace_event.message.split("to producer ").nth(1) {
+                    if let Some(producer_id) = producer_part.split(' ').next() {
+                        *producer_start_counts.entry(producer_id.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+
+            // Check if any producer received more than one start command
+            let multiple_starts: Vec<_> = producer_start_counts
+                .iter()
+                .filter(|(_, count)| **count > 1)
+                .collect();
+
+            if multiple_starts.is_empty() {
+                AssertionResult::success(
+                    format!(
+                        "All {} producers received exactly one Start command for topic '{}'",
+                        producer_count, topic
+                    ),
+                    actual_count,
+                )
+            } else {
+                let details = multiple_starts
+                    .iter()
+                    .map(|(producer, count)| format!("{}: {} commands", producer, count))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                AssertionResult::failure(
+                    format!(
+                        "Some producers received multiple Start commands for topic '{}'",
+                        topic
+                    ),
+                    Some(format!("Producers with multiple starts: {}", details)),
+                )
+            }
+        } else {
+            AssertionResult::failure(
+                format!(
+                    "Expected {} Start commands for topic '{}', but found {}",
+                    expected_count, topic, actual_count
+                ),
+                Some(format!(
+                    "This could indicate missing producers or duplicate start commands"
+                )),
+            )
+        }
+    }
 }
 
 /// Macro for cleaner assertion syntax in tests

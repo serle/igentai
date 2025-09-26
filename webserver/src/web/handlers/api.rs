@@ -3,9 +3,11 @@
 //! HTTP API endpoints for dashboard and control operations
 
 use axum::{extract::State, http::StatusCode, response::Json};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::traits::{OrchestratorClient, WebSocketManager};
 
@@ -20,7 +22,7 @@ where
         "status": "ok",
         "data": {
             "connected_clients": client_count,
-            "server_time": chrono::Utc::now().timestamp(),
+            "server_time": Utc::now().timestamp(),
             "dashboard": {
                 "metrics": null,
                 "insights": []
@@ -61,7 +63,7 @@ pub struct StartRequest {
 
 /// Start generation endpoint - /api/start
 pub async fn start_generation<O>(
-    State(orchestrator_client): State<Arc<tokio::sync::Mutex<O>>>,
+    State(orchestrator_client): State<Arc<Mutex<O>>>,
     Json(request): Json<StartRequest>,
 ) -> Result<Json<Value>, StatusCode>
 where
@@ -100,7 +102,7 @@ where
 
 /// Stop generation endpoint - /api/stop
 pub async fn stop_generation<O>(
-    State(orchestrator_client): State<Arc<tokio::sync::Mutex<O>>>,
+    State(orchestrator_client): State<Arc<Mutex<O>>>,
 ) -> Result<Json<Value>, StatusCode>
 where
     O: OrchestratorClient + Send + Sync + 'static,
