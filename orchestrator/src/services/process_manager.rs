@@ -476,10 +476,43 @@ impl ProcessManager for RealProcessManager {
     }
 
     async fn stop_all(&self) -> OrchestratorResult<()> {
-        // Stop all producers
+        // Stop all producers gracefully
         {
             let mut producers = self.active_producers.lock().await;
             for (producer_id, mut handle) in producers.drain() {
+                process_debug!(shared::ProcessId::current(), "🛑 Stopping producer {} gracefully", producer_id);
+                
+                // Try graceful shutdown first (SIGTERM)
+                #[cfg(unix)]
+                {
+                    use nix::sys::signal::{self, Signal};
+                    use nix::unistd::Pid;
+                    
+                    if let Some(pid) = handle.child.id() {
+                        let nix_pid = Pid::from_raw(pid as i32);
+                        
+                        // Send SIGTERM first
+                        if let Ok(()) = signal::kill(nix_pid, Signal::SIGTERM) {
+                            process_debug!(shared::ProcessId::current(), "📤 Sent SIGTERM to producer {}", producer_id);
+                            
+                            // Wait up to 2 seconds for graceful shutdown
+                            for _ in 0..20 {
+                                match handle.child.try_wait() {
+                                    Ok(Some(_)) => {
+                                        process_debug!(shared::ProcessId::current(), "✅ Producer {} terminated gracefully", producer_id);
+                                        break;
+                                    }
+                                    Ok(None) => {
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // If still running, force kill
                 let _ = handle.child.kill().await;
                 let _ = handle.child.wait().await;
                 process_debug!(shared::ProcessId::current(), "🛑 Stopped producer {}", producer_id);

@@ -289,7 +289,7 @@ impl TracingCollector {
             // Check for topic start patterns
             if !capturing {
                 // Pattern: "✅ Topic 'TOPIC_NAME' started with X iteration budget"
-                if message.contains(&format!("✅ Topic '{}' started", topic)) {
+                if message.contains(&format!("✅ Topic '{}' started with", topic)) {
                     capturing = true;
                     tracing::info!("📍 Found topic start event for '{}'", topic);
                 }

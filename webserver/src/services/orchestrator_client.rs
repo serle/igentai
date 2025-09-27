@@ -28,12 +28,13 @@ pub struct RealOrchestratorClient {
     connection: ConnectionState,
     update_tx: Option<mpsc::Sender<OrchestratorUpdate>>,
     update_rx: Option<mpsc::Receiver<OrchestratorUpdate>>,
-    listen_port: Option<u16>, // None = standalone mode
+    ipc_port: Option<u16>, // IPC port for orchestrator communication, None = standalone mode
+    web_port: u16, // HTTP port for browser connections
 }
 
 impl RealOrchestratorClient {
     /// Create new orchestrator client with IPC
-    pub fn new(bind_addr: SocketAddr, orchestrator_addr: SocketAddr) -> Self {
+    pub fn new(bind_addr: SocketAddr, orchestrator_addr: SocketAddr, web_port: u16) -> Self {
         let (update_tx, update_rx) = mpsc::channel(100);
 
         Self {
@@ -43,12 +44,13 @@ impl RealOrchestratorClient {
             },
             update_tx: Some(update_tx),
             update_rx: Some(update_rx),
-            listen_port: Some(bind_addr.port()),
+            ipc_port: Some(bind_addr.port()),
+            web_port,
         }
     }
 
     /// Create new orchestrator client in standalone mode (no IPC)
-    pub fn new_standalone() -> Self {
+    pub fn new_standalone(web_port: u16) -> Self {
         let (update_tx, update_rx) = mpsc::channel(100);
         // Use dummy address for standalone mode
         let dummy_addr = "127.0.0.1:0".parse().unwrap();
@@ -60,7 +62,8 @@ impl RealOrchestratorClient {
             },
             update_tx: Some(update_tx),
             update_rx: Some(update_rx),
-            listen_port: None, // No IPC in standalone mode
+            ipc_port: None, // Standalone mode - no IPC
+            web_port,
         }
     }
 
@@ -139,7 +142,7 @@ impl RealOrchestratorClient {
 #[async_trait]
 impl OrchestratorClient for RealOrchestratorClient {
     async fn initialize(&mut self) -> WebServerResult<()> {
-        if let Some(port) = self.listen_port {
+        if let Some(port) = self.ipc_port {
             // IPC mode: Start listening for updates from orchestrator (like producer does)
             process_debug!(ProcessId::current(), "🔊 Starting update listener on port {}", port);
 
@@ -202,7 +205,7 @@ impl OrchestratorClient for RealOrchestratorClient {
             // Send ready signal to orchestrator
             let ready_msg = WebServerRequest::Ready {
                 listen_port: port,
-                http_port: 8080, // TODO: Make this configurable
+                http_port: self.web_port, // Report the actual web HTTP port
             };
 
             process_debug!(ProcessId::current(), "📤 Sending ready signal to orchestrator");
@@ -220,7 +223,7 @@ impl OrchestratorClient for RealOrchestratorClient {
     }
 
     async fn send_request(&self, request: WebServerRequest) -> WebServerResult<()> {
-        if self.listen_port.is_some() {
+        if self.ipc_port.is_some() {
             // IPC mode: Send request to orchestrator
             match TcpStream::connect(self.connection.orchestrator_addr).await {
                 Ok(mut stream) => {

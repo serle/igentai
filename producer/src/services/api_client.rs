@@ -3412,7 +3412,8 @@ impl RealApiClient {
         // Select random words without replacement
         let selected_words: Vec<&str> = RANDOM_WORDS.choose_multiple(&mut rng, word_count).copied().collect();
 
-        selected_words.join(" ")
+        // Join with newlines so processor can extract individual attributes
+        selected_words.join("\n")
     }
 
     /// Handle Random provider request (local generation, no HTTP)

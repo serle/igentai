@@ -87,9 +87,46 @@ The uniqueness tracking system implements a Bloom filter for memory-efficient de
 
 This component provides real-time performance metrics calculation across multiple dimensions, implements per-provider cost tracking with token usage analysis, calculates UAM, cost-per-minute, uniqueness ratio measurements, and performs provider comparison and trend analysis to guide optimization decisions.
 
-#### Optimizer (`core/optimizer.rs`)
+#### Optimizer (`optimization/`)
 
-The optimization engine implements multiple strategies including MaximizeUAM, MinimizeCost, MaximizeEfficiency, and Custom Weighted approaches. The system dynamically selects optimal provider routing and implements multiple partitioning strategies. These include semantic partitioning which decomposes topics into meaningful categories, attribute type partitioning focusing on physical properties, functional characteristics, and contextual relationships, and provider-specific partitioning that leverages each provider's individual strengths. The optimizer also generates enhanced prompts based on performance analysis to continuously improve generation effectiveness.
+The optimization system employs a trait-based dependency injection architecture that enables flexible strategy selection and testing. The system provides two primary optimizer implementations: Basic and Adaptive strategies, each designed for different use cases and operational requirements.
+
+**Architecture Design**
+
+The optimizer follows clean architectural principles with separation of concerns across multiple modules:
+
+- `traits.rs` - Contains the core `OptimizerStrategy` trait defining the interface
+- `types.rs` - Shared data structures for optimization context and results
+- `strategies/` - Individual optimizer implementations (Basic, Adaptive)
+
+The `OptimizerStrategy` trait provides four essential methods: `optimize()` for generating recommendations, `update_performance()` for learning from feedback, `reset()` for session initialization, and `get_state()` for monitoring and debugging.
+
+**Basic Optimizer (`strategies/basic.rs`)**
+
+The Basic optimizer provides a completely stateless, functional approach to optimization. It generates consistent, reliable prompts and routing strategies without complex adaptation logic. This optimizer is ideal for stable production environments where predictable behavior is prioritized over advanced optimization.
+
+Key characteristics include:
+
+- Stateless operation with identical outputs for identical inputs
+- Simple, reliable prompt generation focused on concrete nouns and components
+- Straightforward routing strategy selection based on available providers
+- No performance learning or adaptation capabilities
+- Minimal risk factors and immediate effectiveness
+
+**Adaptive Optimizer (`strategies/adaptive.rs`)**
+
+The Adaptive optimizer implements sophisticated learning capabilities with prompt rotation, UAM decline detection, and performance-based adaptation. It uses interior mutability through `RwLock` to maintain state while preserving the clean read-only interface.
+
+Sophisticated features include:
+
+- UAM trend analysis with configurable decline thresholds
+- Dynamic prompt template rotation based on performance patterns
+- Producer-specific prompt assignments for optimization experiments
+- Performance history tracking with sliding window analysis
+- Adaptation level scaling (None, Minimal, Moderate, Aggressive)
+- Temperature and request size adjustments based on performance trends
+
+The adaptive system monitors UAM performance over time and triggers adaptation when decline exceeds configured thresholds, automatically rotating between different prompt strategies to maximize unique attribute generation.
 
 ### 2. Producer (`producer/`)
 
@@ -181,9 +218,11 @@ The data flow demonstrates how topic information enters through either CLI inter
 
 The system implements multiple communication protocols that enable seamless coordination across the distributed network while maintaining security, reliability, and performance objectives.
 
-#### Orchestrator ↔ Producer (TCP/JSON)
+#### Orchestrator ↔ Producer (Internal IPC)
 
-The communication between orchestrators and producers utilizes Command Messages including Start, Stop, UpdateBloomFilter, and Ping operations, along with Update Messages encompassing AttributeBatch transfers, StatusUpdate reports, SyncAck confirmations, and BloomUpdated notifications. This protocol ensures reliable coordination between the central orchestrator and distributed producers.
+The communication between orchestrators and producers utilizes Command Messages including Start, Stop, UpdateConfig, UpdateBloomFilter, and Ping operations, along with Update Messages encompassing AttributeBatch transfers, StatusUpdate reports, SyncAck confirmations, and BloomUpdated notifications. This protocol ensures reliable coordination between the central orchestrator and distributed producers.
+
+The `UpdateConfig` message serves as the primary mechanism for distributing optimization results to producers. When the optimizer generates new prompt assignments or parameter adjustments, these are packaged into UpdateConfig messages and sent to specific producers, enabling dynamic adaptation of generation strategies.
 
 #### Orchestrator ↔ WebServer (Internal IPC)
 
@@ -276,20 +315,65 @@ This framework enables test authors to describe complete distributed workflows i
 
 #### Test Scenarios
 
-The testing framework supports multiple execution scenarios accessible through specific commands:
+The constellation testing framework includes a comprehensive suite of scenarios designed to validate different aspects of the distributed system. Each scenario focuses on specific system behaviors and edge cases.
+
+**Core Functionality Tests**
+
+The core test suite validates fundamental system operations:
+
+- **Basic Test**: Validates essential orchestrator and producer functionality using minimal configuration. The test uses rapid development settings and verifies that the system starts with the correct budget allocation and completes successfully within expected timeframes.
+
+- **Load Test**: Stress tests the system with higher concurrency, utilizing 5 producers with 10 iterations each. This scenario validates system stability under load and ensures proper generation of large attribute volumes (200+). The test uses the OpenAI provider to simulate realistic API interactions.
+
+- **Healing Test**: Validates the system's fault tolerance by simulating producer failures. Using 3 producers with 8 iterations, the test ensures the orchestrator properly handles producer crashes and recovers through automatic healing mechanisms, completing generation despite failures.
+
+- **Single Start Test**: Addresses a critical bug prevention scenario by ensuring each producer receives exactly one Start command per topic. This test prevents duplicate initialization issues that could lead to inconsistent state or resource conflicts.
+
+- **Trace Capture Test**: Validates the distributed tracing infrastructure by ensuring traces are properly collected from all process types (orchestrator, webserver, and producers). This test is essential for verifying observability capabilities.
+
+- **Real API Test**: When API keys are available, this test validates integration with actual LLM providers. Using the OpenAI API with gpt-4o-mini model, it generates real content for "Paris attractions" and verifies the complete generation pipeline.
+
+**Edge Case Tests**
+
+Edge case scenarios ensure graceful handling of boundary conditions:
+
+- **Minimal Test**: Validates system behavior with minimal resources using a single producer and only 2 iterations. This test ensures the system remains functional even with constrained configurations.
+
+- **Empty Test**: Tests the system's handling of zero iterations, ensuring graceful behavior when no actual generation work is requested. This validates proper lifecycle management and prevents crashes in edge cases.
+
+**Web Interface Tests**
+
+- **Server Test**: Validates webserver mode startup and HTTP interface availability. The test ensures the web dashboard properly initializes and responds to HTTP requests on the configured port.
+
+**Test Suite Organization**
+
+The framework provides composite test suites for comprehensive validation:
+
+- **Core Suite**: Executes all core functionality tests in sequence (basic → load → healing → single_start)
+- **All Suite**: Runs the complete test battery including core tests, edge cases, and web interface validation
+
+**Execution Commands**
+
+Tests can be executed individually or as suites:
 
 ```bash
-# Basic CLI mode testing
+# Run a specific scenario
 cargo run --bin tester -- --scenario basic
 
-# WebServer mode testing (interactive)
-cargo run --bin tester -- --scenario webserver
+# Run the core test suite
+cargo run --bin tester -- --scenario core
+
+# Run all tests
+cargo run --bin tester -- --scenario all
 
 # Keep services running for debugging
 cargo run --bin tester -- --keep-running
+
+# Run with verbose tracing
+cargo run --bin tester -- --scenario load --log-level debug
 ```
 
-These scenarios provide comprehensive coverage ranging from basic functionality validation to complex interactive testing with manual HTTP request capabilities.
+Each test produces detailed output including assertion results, performance metrics, and comprehensive trace logs for debugging purposes.
 
 ---
 
@@ -337,161 +421,134 @@ The visual design employs Modern Design Language with gradient backgrounds and g
 
 ---
 
+## Prompt Assignment and Optimization Flow
+
+### Optimization Lifecycle
+
+The optimization system operates through a carefully orchestrated lifecycle that integrates seamlessly with the broader orchestrator workflow:
+
+**Initialization Phase**
+During system startup, the orchestrator receives an optimizer instance through dependency injection. The optimizer is initialized with its configuration and any necessary state is prepared for operation.
+
+**Periodic Optimization Cycle**
+The orchestrator runs optimization evaluations at regular intervals, separate from metrics collection. This separation ensures optimization decisions are based on stable performance data rather than transient fluctuations.
+
+**Context Assembly**
+Before each optimization cycle, the orchestrator assembles an `OptimizationContext` containing:
+
+- Current topic being explored
+- Active producer IDs and their current state
+- Performance metrics including UAM trends, cost data, and uniqueness ratios
+- Available routing options and system defaults
+- Optimization targets and constraints
+
+**Strategy Execution**
+The optimizer analyzes the context and generates an `OptimizationResult` containing:
+
+- Prompt assignments (uniform across all producers or customized per producer)
+- Routing strategy adjustments
+- Generation configuration parameters (temperature, request size, etc.)
+- Assessment of expected impact and confidence levels
+
+**Result Distribution**
+Optimization results are distributed to producers via `UpdateConfig` messages, which contain the new prompt text and any parameter overrides. Producers immediately adopt the new configuration for subsequent requests.
+
+### Prompt Template System
+
+The Adaptive optimizer employs a sophisticated prompt template system designed to maximize unique attribute generation:
+
+**Template Categories**
+
+- **Concrete Templates**: Focus on specific physical objects, materials, and structural components
+- **Creative Templates**: Explore unconventional aspects and hidden elements of topics
+- **Technical Templates**: Emphasize engineering specifications and specialized terminology
+- **Functional Templates**: Target operational aspects and behavioral characteristics
+- **Structural Templates**: Examine organizational and hierarchical elements
+- **Contextual Templates**: Consider environmental and situational factors
+
+**Template Performance Tracking**
+Each template maintains performance metrics including usage count, cumulative UAM contribution, and last usage timestamp. This data enables the optimizer to identify high-performing templates and adjust assignment strategies accordingly.
+
+**Dynamic Assignment Strategy**
+When UAM performance declines, the adaptive optimizer distributes different templates across producers to conduct real-time A/B testing. This approach identifies the most effective prompts for the current topic and performance conditions.
+
+### Configuration and Observability
+
+The optimization system provides comprehensive configuration options and observability features:
+
+**Command-Line Integration**
+Optimization behavior is influenced by command-line arguments:
+
+- `--request-size`: Controls the number of attributes requested per API call
+- `--routing-strategy` and `--routing-config`: Define provider selection and load balancing
+- `--trace-ep`: Enables distributed tracing for optimization decision observability
+- `--log-level debug`: Provides detailed optimization decision logging
+
+**Performance Monitoring**
+Optimization decisions are logged with detailed rationale, expected impact metrics, and confidence assessments. This information supports system debugging and performance analysis.
+
+**State Inspection**
+The optimizer's `get_state()` method provides real-time visibility into:
+
+- Active optimization strategies
+- Performance history size and trends
+- Current adaptation level
+- Last optimization timestamp
+
+This observability enables operators to understand optimization behavior and tune system parameters for optimal performance.
+
 ## Future Extensions
 
-### 1. Advanced Routing Capabilities
+### Advanced Optimizer Strategies
 
-#### Dynamic Provider Selection
+**Semantic-Aware Optimizer**
+- Analyzes generated attributes to build a semantic understanding of the topic space
+- Identifies conceptual gaps and underexplored areas through clustering algorithms
+- Dynamically adjusts prompts to target specific semantic regions
+- Tracks topic coverage completeness and suggests when diminishing returns are reached
 
-The routing system can be enhanced to make real-time decisions based on comprehensive analysis capabilities.
+**Multi-Model Ensemble Optimizer**
+- Leverages different LLM models' unique strengths for specific attribute categories
+- Learns which providers excel at technical, creative, or factual content
+- Implements provider-specific prompt optimization based on historical performance
+- Balances exploration of new approaches with exploitation of proven strategies
 
-**Performance-Based Routing** would implement Adaptive Load Balancing to automatically route more requests to high-performing providers, Cost-Performance Optimization to balance cost constraints with performance requirements, and Latency-Aware Routing to route to fastest-responding providers for time-critical tasks.
+**Contextual Learning Optimizer**
+- Maintains a knowledge base of successful prompt patterns across different topic domains
+- Applies transfer learning from similar topics to accelerate optimization
+- Builds topic-specific vocabularies and terminology preferences
+- Adapts generation parameters based on topic complexity and breadth
 
-**Provider Specialization Detection** could implement automatic specialization identification:
+### Prompt Design Evolution
 
-```rust
-// Future enhancement: Automatic specialization detection
-pub enum ProviderSpecialization {
-    TechnicalContent,    // OpenAI excels at technical topics
-    CreativeContent,     // Anthropic strong in creative domains  
-    FactualContent,      // Gemini reliable for factual information
-    StructuredData,      // Random provider for testing
-}
-```
+**Automated Prompt Engineering**
+- Genetic algorithms for evolving prompt templates through mutation and selection
+- Real-time A/B testing of prompt variations across producer pools
+- Reinforcement learning to optimize prompt structures for maximum uniqueness
+- Natural language analysis of successful vs unsuccessful prompt patterns
 
-**Context-Aware Routing** would enable Topic Classification to route based on topic category (technical, creative, factual), Complexity Assessment using different strategies for simple vs. complex topics, and Historical Learning to improve future routing based on past performance patterns.
+**Dynamic Prompt Composition**
+- Modular prompt building blocks that can be dynamically assembled
+- Context-sensitive prompt expansion based on initial generation results
+- Progressive prompt refinement through iterative feedback loops
+- Automatic incorporation of discovered domain terminology into subsequent prompts
 
-#### Multi-Objective Optimization
+**Prompt Performance Analytics**
+- Detailed metrics on prompt effectiveness by category and provider
+- Visualization of prompt evolution and performance trends over time
+- Identification of prompt fatigue patterns and automatic rotation strategies
+- Cross-topic prompt performance analysis for universal optimization insights
 
-Enhanced optimization could support multiple competing objectives simultaneously:
+### Quality and Relevance Optimization
 
-```rust
-// Enhanced optimization with multiple objectives
-pub struct OptimizationTargets {
-    pub primary_objective: OptimizationMode,
-    pub constraints: Vec<OptimizationConstraint>,
-    pub preferences: Vec<OptimizationPreference>,
-}
+**Attribute Quality Scoring**
+- Machine learning models to assess attribute relevance and quality
+- Automatic filtering of low-quality or off-topic generations
+- Feedback mechanisms to improve future generation quality
+- Provider-specific quality calibration and adjustment
 
-pub enum OptimizationConstraint {
-    MaxCostPerMinute(f64),
-    MinUniquePerMinute(f64),
-    MaxLatency(Duration),
-    PreferredProviders(Vec<ProviderId>),
-}
-```
-
-### 2. Central Optimizer Enhancements
-
-#### Intelligent Progress Monitoring
-
-The optimizer could be enhanced to provide progress analysis capabilities:
-
-**Semantic Progress Tracking** could implement:
-
-```rust
-pub struct ProgressAnalyzer {
-    /// Tracks conceptual coverage of topic space
-    semantic_coverage: SemanticMap,
-  
-    /// Identifies diminishing returns inflection points
-    efficiency_analyzer: EfficiencyTrendAnalyzer,
-  
-    /// Predicts optimal stopping points
-    stopping_criteria_predictor: StoppingPredictor,
-}
-```
-
-**Adaptive Generation Strategies** would enable Dynamic Prompt Evolution to modify prompts based on generation patterns, Semantic Gap Detection to identify unexplored areas of topic space, and Quality Assessment to monitor attribute quality and adjust strategies accordingly.
-
-#### Prompt Engineering Automation
-
-Automated prompt optimization could implement enhancement capabilities:
-
-```rust
-pub struct PromptOptimizer {
-    /// Historical prompt performance data
-    prompt_performance_history: Vec<PromptPerformanceRecord>,
-  
-    /// A/B testing framework for prompt variations
-    prompt_testing_framework: PromptTestingFramework,
-  
-    /// Genetic algorithm for prompt evolution
-    prompt_evolution_engine: GeneticPromptEvolution,
-}
-```
-
-This would provide Automated A/B Testing to test prompt variations simultaneously, Genetic Prompt Evolution to evolve successful prompts over time, Context-Sensitive Templates to generate prompts tailored to specific topics, and Performance Feedback Loop for continuous prompt effectiveness improvement.
-
-#### Real-Time Strategy Adaptation
-
-Advanced adaptation capabilities could implement system adjustment:
-
-```rust
-pub struct AdaptiveOrchestrator {
-    /// Monitors generation efficiency in real-time
-    efficiency_monitor: EfficiencyMonitor,
-  
-    /// Makes routing adjustments based on performance
-    dynamic_router: DynamicRouter,
-  
-    /// Adjusts generation parameters on the fly
-    parameter_optimizer: ParameterOptimizer,
-}
-```
-
-This would enable Runtime Strategy Switching to change routing strategies mid-generation, Producer Rebalancing to redistribute work based on performance, Parameter Tuning to adjust request sizes, timeouts, retry logic dynamically, and Failure Recovery with automatic failover and recovery mechanisms.
-
-### 3. Advanced Analytics & Insights
-
-#### Topic Space Analysis
-
-Enhanced analytics could provide comprehensive topic exploration intelligence:
-
-```rust
-pub struct TopicSpaceAnalyzer {
-    /// Maps discovered attributes to semantic clusters
-    semantic_clustering: SemanticClusteringEngine,
-  
-    /// Identifies gaps in topic coverage
-    coverage_analyzer: CoverageAnalyzer,
-  
-    /// Predicts unexplored high-value areas
-    exploration_recommender: ExplorationRecommender,
-}
-```
-
-#### Predictive Performance Modeling
-
-Advanced modeling could provide Generation Forecasting to predict total unique attributes achievable for a topic, Cost Estimation for accurate cost predictions before starting generation, Time-to-Completion estimates for reaching saturation, and Provider Recommendations suggesting optimal provider combinations.
-
-### 4. Enhanced User Experience
-
-#### Advanced Dashboard Features
-
-Enhanced interface capabilities could include Topic Templates with pre-configured settings for common topic types, Generation History providing historical view of past sessions, Performance Comparisons enabling side-by-side analysis of different runs, Export Options supporting CSV, JSON, PDF report generation, and Custom Metrics with user-defined KPIs and monitoring dashboards.
-
-#### Collaborative Features
-
-Team-oriented enhancements could provide Multi-User Support with role-based permissions, Shared Topics for collaborative topic exploration, Annotation System to add notes and classifications to generated attributes, and Quality Rating through community-driven attribute quality assessment.
-
-### 5. Scalability & Infrastructure
-
-#### Horizontal Scaling
-
-Enhanced scalability could implement distributed orchestration capabilities:
-
-```rust
-pub struct DistributedOrchestrator {
-    /// Manages orchestrator cluster
-    cluster_manager: ClusterManager,
-  
-    /// Distributes work across nodes
-    work_distribution: WorkDistributor,
-  
-    /// Consistent hashing for state distribution
-    state_partitioner: ConsistentHashPartitioner,
-}
-```
-
-This architecture provides a foundation for scaling to handle larger workloads and more complex orchestration scenarios while maintaining the system's core principles of modularity and testability.
+**Intelligent Deduplication**
+- Semantic similarity detection beyond exact string matching
+- Concept-level deduplication to maximize true uniqueness
+- Hierarchical attribute organization to identify redundant categories
+- Smart merging of similar attributes into refined versions

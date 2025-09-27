@@ -3,6 +3,7 @@
 pub mod backoff_routing;
 pub mod bloom_filter_e2e;
 pub mod command_handling;
+pub mod config_updates;
 pub mod ipc_communication;
 pub mod multi_producer;
 pub mod orchestration_e2e;

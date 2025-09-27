@@ -91,7 +91,7 @@ async fn main() -> WebServerResult<()> {
             ProcessId::current(),
             "🔧 Starting in standalone mode (no orchestrator connection)"
         );
-        RealOrchestratorClient::new_standalone()
+        RealOrchestratorClient::new_standalone(args.port)
     } else {
         let orchestrator_addr: SocketAddr = args
             .orchestrator_addr
@@ -111,7 +111,7 @@ async fn main() -> WebServerResult<()> {
                 listen_addr,
                 orchestrator_addr
             );
-            RealOrchestratorClient::new(listen_addr, orchestrator_addr)
+            RealOrchestratorClient::new(listen_addr, orchestrator_addr, args.port)
         } else {
             return Err(webserver::WebServerError::config(
                 "Listen port required when orchestrator address is provided. Use --listen-port.".to_string()
@@ -131,17 +131,34 @@ async fn main() -> WebServerResult<()> {
 
     // Set up graceful shutdown
     let shutdown_sender = webserver.get_shutdown_sender();
+    
+    // Handle SIGINT (Ctrl+C)
+    let shutdown_sender_sigint = shutdown_sender.clone();
     tokio::spawn(async move {
         match signal::ctrl_c().await {
             Ok(()) => {
-                logging::log_shutdown(ProcessId::current(), "Received Ctrl+C signal");
-                let _ = shutdown_sender.send(()).await;
+                logging::log_shutdown(ProcessId::current(), "Received SIGINT signal");
+                let _ = shutdown_sender_sigint.send(()).await;
             }
             Err(err) => {
-                logging::log_error(ProcessId::current(), "Signal handling", &err);
+                logging::log_error(ProcessId::current(), "SIGINT handling", &err);
             }
         }
     });
+
+    // Handle SIGTERM (graceful shutdown from process managers)
+    #[cfg(unix)]
+    {
+        let shutdown_sender_sigterm = shutdown_sender.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+            
+            sigterm.recv().await;
+            logging::log_shutdown(ProcessId::current(), "Received SIGTERM signal");
+            let _ = shutdown_sender_sigterm.send(()).await;
+        });
+    }
 
     // Start webserver (standalone mode detected automatically)
     webserver.run(http_addr, standalone_mode).await?;

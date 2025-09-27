@@ -43,7 +43,7 @@ pub use runtime::ServiceConstellation;
 pub use testing::Topic;
 
 // Supporting types
-pub use runtime::{CollectedEvent, TraceQuery, TracingCollector};
+pub use runtime::{CleanupManager, CollectedEvent, TraceQuery, TracingCollector};
 pub use scenarios::TestScenarios;
 pub use testing::{AssertionResult, TracingAssertions};
 pub use testing::{OutputComparison, OutputData, OutputLoader, OutputMetadata};

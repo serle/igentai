@@ -12,22 +12,24 @@ use tokio::time::{interval, Duration};
 use shared::messages::webserver::CompletionReason;
 use shared::{
     logging, process_debug, process_error, process_info, GenerationConstraints, OptimizationMode, OrchestratorCommand,
-    OrchestratorUpdate, ProcessId, ProcessStatus, ProducerUpdate, WebServerRequest,
+    OrchestratorUpdate, ProcessId, ProcessStatus, ProducerUpdate, ProviderId, WebServerRequest,
 };
 
 use crate::{
     core::OrchestratorState,
     error::OrchestratorResult,
+    optimization::{OptimizerStrategy, OptimizationContext, OptimizationResult, PerformanceMetrics, OptimizationTargets, RoutingOptions, TrendDirection, PerformanceTrend},
     traits::{ApiKeySource, Communicator, FileSystem, ProcessManager},
 };
 
 /// Main orchestrator that coordinates the entire system
-pub struct Orchestrator<A, C, F, P>
+pub struct Orchestrator<A, C, F, P, O>
 where
     A: ApiKeySource + Send + Sync + 'static,
     C: Communicator + Send + Sync + 'static,
     F: FileSystem + Send + Sync + 'static,
     P: ProcessManager + Send + Sync + 'static,
+    O: OptimizerStrategy + Send + Sync + 'static,
 {
     /// Core state management
     state: Arc<Mutex<OrchestratorState>>,
@@ -37,6 +39,7 @@ where
     communicator: C,
     file_system: F,
     process_manager: P,
+    optimizer: O,
 
     /// Active message receivers
     webserver_rx: Option<mpsc::Receiver<WebServerRequest>>,
@@ -53,15 +56,16 @@ where
     shutdown_rx: mpsc::Receiver<()>,
 }
 
-impl<A, C, F, P> Orchestrator<A, C, F, P>
+impl<A, C, F, P, O> Orchestrator<A, C, F, P, O>
 where
     A: ApiKeySource + Send + Sync + 'static,
     C: Communicator + Send + Sync + 'static,
     F: FileSystem + Send + Sync + 'static,
     P: ProcessManager + Send + Sync + 'static,
+    O: OptimizerStrategy + Send + Sync + 'static,
 {
     /// Create new orchestrator with injected dependencies
-    pub fn new(api_keys: A, communicator: C, file_system: F, process_manager: P) -> Self {
+    pub fn new(api_keys: A, communicator: C, file_system: F, process_manager: P, optimizer: O) -> Self {
         let state = Arc::new(Mutex::new(OrchestratorState::new()));
         let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
 
@@ -71,6 +75,7 @@ where
             communicator,
             file_system,
             process_manager,
+            optimizer,
             webserver_rx: None,
             producer_rx: None,
             producer_addr: None,
@@ -351,6 +356,7 @@ where
     pub async fn run(&mut self) -> OrchestratorResult<()> {
         let mut metrics_interval = interval(Duration::from_secs(3));
         let mut health_interval = interval(Duration::from_secs(10));
+        let mut optimization_interval = interval(Duration::from_secs(15)); // Optimization every 15s
 
         loop {
             tokio::select! {
@@ -382,7 +388,7 @@ where
 
                 // Periodic metrics collection and optimization
                 _ = metrics_interval.tick() => {
-                    if let Err(e) = self.collect_and_send_metrics().await {
+                    if let Err(e) = self.send_metrics().await {
                         process_error!(ProcessId::current(), "⚠️ Error collecting metrics: {}. Will retry on next interval.", e);
                         
                         // Log current webserver connection status for debugging
@@ -392,8 +398,15 @@ where
 
                 // Periodic health checks
                 _ = health_interval.tick() => {
-                    if let Err(e) = self.perform_health_checks().await {
+                    if let Err(e) = self.check_health().await {
                         process_error!(ProcessId::current(), "⚠️ Error during health check: {}", e);
+                    }
+                },
+
+                // Periodic optimization and producer updates
+                _ = optimization_interval.tick() => {
+                    if let Err(e) = self.optimize_and_sync().await {
+                        process_error!(ProcessId::current(), "⚠️ Error during optimization: {}", e);
                     }
                 },
 
@@ -608,27 +621,36 @@ where
         // Generate initial prompt and configuration with custom request_size
         let (prompt, mut routing_strategy, mut generation_config) = {
             let state = self.state.lock().await;
-            let optimizer = state.get_optimizer();
             
-            // Get routing strategies for fallback hierarchy
-            let topic_routing_strategy = Some(&state.context.routing_strategy);
-            let orchestrator_default_routing_strategy = state.get_default_routing_strategy();
+            // Collect active producer IDs 
+            let active_producers: Vec<ProviderId> = (0..producer_count)
+                .map(|_| shared::ProviderId::Random) // Default for now, will be determined by API keys
+                .collect();
             
-            let optimization = optimizer.optimize_for_topic(
-                &topic,
-                &state.get_performance_stats(),
-                &state.context.optimization_targets.optimization_mode,
-                topic_routing_strategy,
-                orchestrator_default_routing_strategy,
-            )?;
+            let context = self.create_optimization_context(&topic, &state, active_producers);
+            drop(state); // Release lock before async call
+            
+            let optimization_result = self.optimizer.optimize(context).await?;
+            
+            // Extract the prompt - handle both uniform and per-producer assignments
+            let prompt = if let Some(default_prompt) = optimization_result.prompt_assignments.default_prompt {
+                default_prompt
+            } else {
+                // For now, just use the first producer's prompt if they're all different
+                optimization_result.prompt_assignments.producer_specific
+                    .values()
+                    .next()
+                    .map(|assignment| assignment.prompt.clone())
+                    .unwrap_or_else(|| "Generate unique attributes for the given topic.".to_string())
+            };
 
-            tracing::debug!("🎯 CLI Orchestrator generated prompt: '{}'", optimization.optimized_prompt);
-            tracing::debug!("🎯 CLI Topic: '{}', Routing: {:?}", topic, optimization.routing_strategy);
+            tracing::debug!("🎯 CLI Orchestrator generated prompt: '{}'", prompt);
+            tracing::debug!("🎯 CLI Topic: '{}', Routing: {:?}", topic, optimization_result.routing_strategy);
 
             (
-                optimization.optimized_prompt,
-                optimization.routing_strategy,
-                optimization.generation_config,
+                prompt,
+                optimization_result.routing_strategy,
+                optimization_result.generation_config,
             )
         };
 
@@ -869,20 +891,32 @@ where
         if status == ProcessStatus::Running && !state.is_producer_started(&producer_id) {
             if let Some(topic) = &state.context.topic {
                 // Generate and send start command to heal the producer
-                let optimizer = state.get_optimizer();
-                if let Ok(optimization) = optimizer.optimize_for_topic(
-                    topic,
-                    &state.get_performance_stats(),
-                    &state.context.optimization_targets.optimization_mode,
-                    Some(&state.context.routing_strategy),
-                    state.get_default_routing_strategy(),
-                ) {
+                let topic = topic.clone(); // Clone topic before dropping state lock
+                let active_producers = vec![ProviderId::Random]; // Default for single producer recovery
+                let context = self.create_optimization_context(&topic, &state, active_producers);
+                
+                // Drop the state lock before async call
+                drop(state);
+                
+                if let Ok(optimization_result) = self.optimizer.optimize(context).await {
+                    // Extract the prompt - handle both uniform and per-producer assignments
+                    let prompt = if let Some(default_prompt) = optimization_result.prompt_assignments.default_prompt {
+                        default_prompt
+                    } else {
+                        // For producer recovery, just use the first producer's prompt if they're all different
+                        optimization_result.prompt_assignments.producer_specific
+                            .values()
+                            .next()
+                            .map(|assignment| assignment.prompt.clone())
+                            .unwrap_or_else(|| "Generate unique attributes for the given topic.".to_string())
+                    };
+                    
                     let command = OrchestratorCommand::Start {
                         command_id: chrono::Utc::now().timestamp_millis() as u64,
                         topic: topic.clone(),
-                        prompt: optimization.optimized_prompt,
-                        routing_strategy: optimization.routing_strategy,
-                        generation_config: optimization.generation_config,
+                        prompt,
+                        routing_strategy: optimization_result.routing_strategy,
+                        generation_config: optimization_result.generation_config,
                     };
 
                     process_debug!(
@@ -893,10 +927,10 @@ where
                     );
 
                     // Mark producer as started for current topic
-                    state.mark_producer_started(producer_id.clone());
-
-                    // Drop the state lock before async call
-                    drop(state);
+                    {
+                        let mut state = self.state.lock().await;
+                        state.mark_producer_started(producer_id.clone());
+                    }
 
                     // Send the command directly
                     if let Err(e) = self
@@ -1028,41 +1062,15 @@ where
         Ok(())
     }
 
-    /// Collect performance metrics and send to webserver
-    async fn collect_and_send_metrics(&self) -> OrchestratorResult<()> {
+    /// Send metrics to webserver (stats only, no optimization)
+    async fn send_metrics(&self) -> OrchestratorResult<()> {
         let (metrics, active_producers, current_topic, total_unique) = {
             let mut state = self.state.lock().await;
 
             // Update performance tracker
             state.performance.recalculate_stats();
 
-            // Check if optimization is needed
-            let optimizer = state.get_optimizer();
-            let performance_stats = state.get_performance_stats();
-
-            // Run optimization if needed
-            if let Some(topic) = &state.context.topic {
-                if let Ok(optimization) = optimizer.optimize_for_topic(
-                    topic,
-                    &performance_stats,
-                    &state.context.optimization_targets.optimization_mode,
-                    Some(&state.context.routing_strategy),
-                    state.get_default_routing_strategy(),
-                ) {
-                    if optimization.confidence > 0.8 {
-                        process_debug!(
-                            ProcessId::current(),
-                            "🎯 Optimization opportunity found (confidence: {:.1}%): {}",
-                            optimization.confidence * 100.0,
-                            optimization.rationale
-                        );
-
-                        // TODO: Send updated configuration to producers
-                        // This would involve sending UpdateConfig commands to active producers
-                    }
-                }
-            }
-
+            // Just collect metrics
             let metrics = state.get_system_metrics();
             let active_producers = state.get_active_producer_count();
             let current_topic = state.context.topic.clone();
@@ -1094,7 +1102,7 @@ where
     }
 
     /// Perform periodic health checks and restart failed producers
-    async fn perform_health_checks(&self) -> OrchestratorResult<()> {
+    async fn check_health(&self) -> OrchestratorResult<()> {
         process_debug!(ProcessId::current(), "🔍 Checking producer pool health");
         
         // Also check webserver connection health by sending a test statistics update
@@ -1217,22 +1225,35 @@ where
                     );
 
                     // Queue start command for the new producer
-                    let optimizer = state.get_optimizer();
-                    if let Ok(optimization) = optimizer.optimize_for_topic(
-                        &topic,
-                        &state.get_performance_stats(),
-                        &state.context.optimization_targets.optimization_mode,
-                        Some(&state.context.routing_strategy),
-                        state.get_default_routing_strategy(),
-                    ) {
+                    let active_producers = vec![ProviderId::Random]; // Default for replacement producer
+                    let context = self.create_optimization_context(&topic, &state, active_producers);
+                    
+                    // Drop state lock for async call
+                    drop(state);
+                    
+                    if let Ok(optimization_result) = self.optimizer.optimize(context).await {
+                        // Extract the prompt - handle both uniform and per-producer assignments
+                        let prompt = if let Some(default_prompt) = optimization_result.prompt_assignments.default_prompt {
+                            default_prompt
+                        } else {
+                            // For replacement producer, just use the first producer's prompt if they're all different
+                            optimization_result.prompt_assignments.producer_specific
+                                .values()
+                                .next()
+                                .map(|assignment| assignment.prompt.clone())
+                                .unwrap_or_else(|| "Generate unique attributes for the given topic.".to_string())
+                        };
+                        
                         let command = OrchestratorCommand::Start {
                             command_id: chrono::Utc::now().timestamp_millis() as u64,
                             topic: topic.clone(),
-                            prompt: optimization.optimized_prompt,
-                            routing_strategy: optimization.routing_strategy,
-                            generation_config: optimization.generation_config,
+                            prompt,
+                            routing_strategy: optimization_result.routing_strategy,
+                            generation_config: optimization_result.generation_config,
                         };
 
+                        // Re-acquire lock to queue command
+                        let mut state = self.state.lock().await;
                         state.queue_start_command(new_producer_info.id.clone(), command);
                     }
                 }
@@ -1326,6 +1347,143 @@ where
     /// Get shutdown sender for external shutdown requests
     pub fn get_shutdown_sender(&self) -> mpsc::Sender<()> {
         self.shutdown_tx.clone()
+    }
+
+    /// Convert current state to optimization context for the new optimizer interface
+    fn create_optimization_context(
+        &self,
+        topic: &str,
+        state: &crate::core::OrchestratorState,
+        active_producers: Vec<ProviderId>,
+    ) -> OptimizationContext {
+        let performance_stats = state.get_performance_stats();
+        
+        // Convert legacy performance stats to new format
+        let performance = PerformanceMetrics {
+            overall_uam: performance_stats.overall.uam,
+            cost_per_minute: performance_stats.overall.cost_per_minute,
+            uniqueness_ratio: performance_stats.overall.uniqueness_ratio,
+            by_provider: performance_stats.by_provider.iter().map(|(id, metrics)| {
+                (*id, crate::optimization::types::ProviderMetrics {
+                    uam: metrics.uam,
+                    cost_per_minute: metrics.cost_per_minute,
+                    uniqueness_ratio: metrics.uniqueness_ratio,
+                    response_time_ms: 0.0, // Not available in legacy format
+                    success_rate: 1.0,     // Not available in legacy format
+                })
+            }).collect(),
+            trend: PerformanceTrend {
+                direction: TrendDirection::Stable, // Simplified for now
+                magnitude: 0.0,
+                confidence: 0.5,
+                sample_size: active_producers.len(),
+            },
+        };
+
+        let targets = OptimizationTargets {
+            mode: state.context.optimization_targets.optimization_mode.clone(),
+            max_cost_per_minute: state.context.optimization_targets.max_cost_per_minute,
+            target_uam: state.context.optimization_targets.min_uam,
+            quality_threshold: 0.7,
+        };
+
+        let routing_options = RoutingOptions {
+            topic_preference: Some(state.context.routing_strategy.clone()),
+            system_default: state.get_default_routing_strategy().cloned(),
+        };
+
+        OptimizationContext {
+            topic: topic.to_string(),
+            performance,
+            active_producers,
+            targets,
+            routing_options,
+        }
+    }
+
+    /// Run optimization and sync results to producers via UpdateConfig commands
+    async fn optimize_and_sync(&self) -> OrchestratorResult<()> {
+        let (_topic, _active_producers, optimization_result) = {
+            let state = self.state.lock().await;
+            
+            // Only optimize if we have an active topic and producers
+            let topic = match &state.context.topic {
+                Some(topic) => topic.clone(),
+                None => return Ok(()), // No active generation
+            };
+
+            // Get actual active producer IDs from state
+            let active_producers: Vec<ProviderId> = (0..state.get_active_producer_count())
+                .map(|_| ProviderId::Random) // Simplified for now
+                .collect();
+
+            if active_producers.is_empty() {
+                return Ok(()); // No producers to optimize
+            }
+
+            let context = self.create_optimization_context(&topic, &state, active_producers.clone());
+            drop(state); // Release lock for async call
+
+            let optimization_result = self.optimizer.optimize(context).await?;
+            
+            (topic, active_producers, optimization_result)
+        };
+
+        // Check if optimization suggests significant changes
+        if optimization_result.assessment.confidence > 0.7 {
+            process_debug!(
+                ProcessId::current(),
+                "🎯 Optimization update (confidence: {:.1}%): {}",
+                optimization_result.assessment.confidence * 100.0,
+                optimization_result.assessment.rationale
+            );
+
+            // Send UpdateConfig commands to all active producers
+            let update_commands = self.create_update_commands(&optimization_result);
+            
+            for (producer_id, command) in update_commands {
+                if let Err(e) = self.communicator.send_producer_command(producer_id, command).await {
+                    process_error!(ProcessId::current(), "❌ Failed to send optimization update: {}", e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Create UpdateConfig commands from optimization results
+    fn create_update_commands(&self, result: &OptimizationResult) -> Vec<(ProcessId, OrchestratorCommand)> {
+        let mut commands = Vec::new();
+        let command_id = chrono::Utc::now().timestamp_millis() as u64;
+
+        // For uniform prompts, send same update to all producers
+        if let Some(default_prompt) = &result.prompt_assignments.default_prompt {
+            // Send to all active producers (simplified - would get actual producer IDs from state)
+            for i in 1..=4 { // Assuming max 4 producers for now
+                let producer_id = ProcessId::Producer(i);
+                let command = OrchestratorCommand::UpdateConfig {
+                    command_id,
+                    routing_strategy: Some(result.routing_strategy.clone()),
+                    generation_config: Some(result.generation_config.clone()),
+                    prompt: Some(default_prompt.clone()),
+                };
+                commands.push((producer_id, command));
+            }
+        } else {
+            // Send producer-specific updates
+            for (i, (_provider_id, assignment)) in result.prompt_assignments.producer_specific.iter().enumerate() {
+                let producer_id = ProcessId::Producer((i + 1) as u32);
+                let command = OrchestratorCommand::UpdateConfig {
+                    command_id,
+                    routing_strategy: Some(result.routing_strategy.clone()),
+                    generation_config: Some(result.generation_config.clone()),
+                    prompt: Some(assignment.prompt.clone()),
+                };
+                commands.push((producer_id, command));
+            }
+        }
+
+        commands
     }
 
     /// Test webserver connection health and attempt to restore if needed

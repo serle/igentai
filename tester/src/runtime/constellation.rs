@@ -4,6 +4,7 @@
 //! For individual binary testing, use the specific binary test suites instead.
 
 use crate::config::OrchestratorConfig;
+use crate::runtime::cleanup::CleanupManager;
 use std::process::{Child, Command};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -11,6 +12,7 @@ use tokio::time::sleep;
 pub struct ServiceConstellation {
     trace_endpoint: String,
     orchestrator: Option<Child>,
+    cleanup_manager: CleanupManager,
 }
 
 impl ServiceConstellation {
@@ -18,6 +20,7 @@ impl ServiceConstellation {
         Self {
             trace_endpoint,
             orchestrator: None,
+            cleanup_manager: CleanupManager::new(),
         }
     }
 
@@ -27,6 +30,10 @@ impl ServiceConstellation {
             crate::config::OrchestratorMode::Cli => "CLI",
             crate::config::OrchestratorMode::WebServer => "WebServer",
         };
+
+        // Perform cleanup before starting orchestrator
+        let scenario_name = config.topic.as_deref().unwrap_or("unknown");
+        self.cleanup_manager.cleanup_before_test(scenario_name).await?;
 
         tracing::info!("🚀 Starting orchestrator in {} mode", mode_str);
 
@@ -44,7 +51,9 @@ impl ServiceConstellation {
         cmd.args(final_config.to_args());
         
         // Set the current directory to project root to ensure .env file is loaded
-        cmd.current_dir(".");
+        let project_root = std::env::current_dir().expect("Failed to get current directory");
+        tracing::debug!("🔧 Setting orchestrator working directory to: {:?}", project_root);
+        cmd.current_dir(&project_root);
         
         // Inherit stdio to ensure child process output is visible
         cmd.stdout(std::process::Stdio::inherit())
@@ -194,6 +203,30 @@ impl ServiceConstellation {
             libc::kill(child.id() as i32, libc::SIGTERM);
         }
         Ok(())
+    }
+
+    /// Perform manual cleanup (useful for debugging or when automatic cleanup fails)
+    pub async fn manual_cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        tracing::info!("🧹 Performing manual cleanup");
+        self.cleanup_manager.cleanup_before_test("manual").await?;
+        Ok(())
+    }
+
+    /// Perform emergency cleanup (more aggressive)
+    pub async fn emergency_cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        tracing::warn!("🚨 Performing emergency cleanup");
+        self.cleanup_manager.emergency_cleanup().await?;
+        Ok(())
+    }
+
+    /// Get access to the cleanup manager for custom cleanup operations
+    pub fn cleanup_manager(&self) -> &CleanupManager {
+        &self.cleanup_manager
+    }
+
+    /// Get mutable access to the cleanup manager for configuration
+    pub fn cleanup_manager_mut(&mut self) -> &mut CleanupManager {
+        &mut self.cleanup_manager
     }
 }
 

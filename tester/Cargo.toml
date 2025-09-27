@@ -26,6 +26,7 @@ hyper = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 clap = { workspace = true }
 uuid = { workspace = true }
+dotenv = { workspace = true }
 
 # Test framework
 assert_matches = "1.5"

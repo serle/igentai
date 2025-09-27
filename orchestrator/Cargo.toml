@@ -29,6 +29,10 @@ tracing-subscriber.workspace = true
 mockall = "0.12"
 growable-bloom-filter = "2.1"
 
+# Unix-specific dependencies for signal handling
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", features = ["process", "signal"] }
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.8"

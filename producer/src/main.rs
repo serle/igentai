@@ -569,19 +569,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Set up signal handling for graceful shutdown
     let shutdown_sender = producer.shutdown_sender();
+    
+    // Handle SIGINT (Ctrl+C)
+    let shutdown_sender_sigint = shutdown_sender.clone();
     tokio::spawn(async move {
         match tokio::signal::ctrl_c().await {
             Ok(()) => {
-                logging::log_shutdown(ProcessId::current(), "Received Ctrl+C signal");
-                if shutdown_sender.send(()).await.is_err() {
+                logging::log_shutdown(ProcessId::current(), "Received SIGINT signal");
+                if shutdown_sender_sigint.send(()).await.is_err() {
                     process_error!(ProcessId::current(), "Failed to send shutdown signal");
                 }
             }
             Err(err) => {
-                logging::log_error(ProcessId::current(), "Signal handling", &err);
+                logging::log_error(ProcessId::current(), "SIGINT handling", &err);
             }
         }
     });
+
+    // Handle SIGTERM (graceful shutdown from process managers)
+    #[cfg(unix)]
+    {
+        let shutdown_sender_sigterm = shutdown_sender.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+            
+            sigterm.recv().await;
+            logging::log_shutdown(ProcessId::current(), "Received SIGTERM signal");
+            if shutdown_sender_sigterm.send(()).await.is_err() {
+                process_error!(ProcessId::current(), "Failed to send shutdown signal");
+            }
+        });
+    }
 
     // Run producer
     match producer.run().await {

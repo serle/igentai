@@ -156,6 +156,11 @@ where
         };
         event.record(&mut visitor);
 
+        // Only send traces that have the 'process' attribute (from our process_* macros)
+        if !fields.contains_key("process") {
+            return; // Skip traces without process attribute
+        }
+
         let trace_event = TraceEvent {
             timestamp: Utc::now(),
             level: metadata.level().to_string(),
@@ -221,13 +226,20 @@ impl<'a> tracing::field::Visit for TraceVisitor<'a> {
 pub fn init_tracing_with_endpoint_and_level(endpoint: Option<TracingEndpoint>, log_level: Option<&str>) {
     use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-    // Determine log level - priority: CLI arg > ENV > default
-    let level_filter = if let Some(level) = log_level {
-        level.to_string()
-    } else {
-        EnvFilter::try_from_default_env()
-            .map(|f| f.to_string())
-            .unwrap_or_else(|_| "info".to_string())
+    // Use the same filtering logic as stdout tracing for consistency
+    let process_id = ProcessId::current();
+    let base_level = log_level.unwrap_or("info");
+
+    let level_filter = match process_id {
+        ProcessId::Orchestrator => {
+            format!("orchestrator={base_level},shared={base_level},tower=warn,hyper=warn")
+        }
+        ProcessId::Producer(_) => {
+            format!("producer={base_level},shared={base_level},reqwest=warn")
+        }
+        ProcessId::WebServer => {
+            format!("webserver={base_level},shared={base_level},tower_http=debug,axum={base_level}")
+        }
     };
 
     let env_filter = EnvFilter::new(&level_filter);
@@ -296,13 +308,13 @@ fn init_tracing_stdout_with_level(log_level: Option<&str>) {
 
     let env_filter = match process_id {
         ProcessId::Orchestrator => {
-            format!("orchestrator={base_level},tower=warn,hyper=warn")
+            format!("orchestrator={base_level},shared={base_level},tower=warn,hyper=warn")
         }
         ProcessId::Producer(_) => {
-            format!("producer={base_level},reqwest=warn")
+            format!("producer={base_level},shared={base_level},reqwest=warn")
         }
         ProcessId::WebServer => {
-            format!("webserver={base_level},tower_http=debug,axum={base_level}")
+            format!("webserver={base_level},shared={base_level},tower_http=debug,axum={base_level}")
         }
     };
 

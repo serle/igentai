@@ -3,7 +3,7 @@
 //! This module provides the main state structure that coordinates
 //! all aspects of the orchestrator system.
 
-use super::{Optimizer, PerformanceTracker, UniquenessTracker};
+use super::{PerformanceTracker, UniquenessTracker};
 use crate::error::OrchestratorResult;
 use serde::{Deserialize, Serialize};
 use shared::{process_debug, process_info, OrchestratorCommand, ProcessId, ProviderId, SystemMetrics};
@@ -65,9 +65,6 @@ pub struct OrchestratorState {
 
     /// Performance metrics and cost tracking
     pub performance: PerformanceTracker,
-
-    /// Optimization logic and decision making
-    optimizer: Optimizer,
 
     /// Current generation context
     pub context: GenerationContext,
@@ -139,7 +136,6 @@ impl OrchestratorState {
         Self {
             uniqueness: UniquenessTracker::new(),
             performance: PerformanceTracker::new(),
-            optimizer: Optimizer::new(),
             context: GenerationContext::default(),
             producers: HashMap::new(),
             start_time: Instant::now(),
@@ -583,10 +579,6 @@ impl OrchestratorState {
         self.producers.remove(producer_id);
     }
 
-    /// Get optimizer reference
-    pub fn get_optimizer(&self) -> &Optimizer {
-        &self.optimizer
-    }
 
     /// Get performance statistics
     pub fn get_performance_stats(&self) -> crate::core::performance::PerformanceStats {

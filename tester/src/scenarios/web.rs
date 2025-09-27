@@ -14,8 +14,8 @@ pub async fn server(
 
     let config = OrchestratorConfig::builder()
         .webserver_mode()
-        .webserver_addr("127.0.0.1:8080")
-        .producer_addr("127.0.0.1:6001")
+        .webserver_addr("127.0.0.1:6003") // IPC address for orchestrator-webserver communication
+        .producer_addr("127.0.0.1:6001")  // IPC address for orchestrator-producer communication
         .build();
 
     constellation.start_orchestrator(config).await?;
@@ -23,7 +23,7 @@ pub async fn server(
     // Give it a moment to start up
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // Test that webserver is responsive
+    // Test that webserver is responsive on the HTTP port (8080)
     match reqwest::get("http://127.0.0.1:8080/").await {
         Ok(response) => {
             if response.status().is_success() {

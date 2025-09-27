@@ -553,8 +553,8 @@ mod tests {
         let cost = tracker.calculate_cost(&ProviderId::OpenAI, &tokens);
         assert!(cost > 0.0);
 
-        // Should be: (1000/1000 * 0.03) + (500/1000 * 0.06) = 0.03 + 0.03 = 0.06
-        assert!((cost - 0.06).abs() < 0.001);
+        // Should be: (1000/1000 * 0.00015) + (500/1000 * 0.0006) = 0.00015 + 0.0003 = 0.00045
+        assert!((cost - 0.00045).abs() < 0.000001);
     }
 
     #[test]

@@ -10,6 +10,7 @@ use tokio::signal;
 
 use orchestrator::{
     services::{RealApiKeySource, RealCommunicator, RealFileSystem, RealProcessManager},
+    optimization::strategies::BasicOptimizer,
     Orchestrator, OrchestratorResult,
 };
 use shared::{logging, process_debug, process_info, ProcessId};
@@ -136,8 +137,11 @@ async fn main() -> OrchestratorResult<()> {
         .with_trace_endpoint(args.trace_ep.clone())
         .with_log_level(args.log_level.clone());
 
+    // Create basic optimizer for the CLI
+    let optimizer = BasicOptimizer::new();
+
     // Create orchestrator with dependency injection
-    let mut orchestrator = Orchestrator::new(api_keys, communicator, file_system, process_manager);
+    let mut orchestrator = Orchestrator::new(api_keys, communicator, file_system, process_manager, optimizer);
 
     // Configure bind addresses
     let webserver_addr: SocketAddr = args
@@ -178,17 +182,34 @@ async fn main() -> OrchestratorResult<()> {
 
     // Set up graceful shutdown
     let shutdown_sender = orchestrator.get_shutdown_sender();
+    
+    // Handle SIGINT (Ctrl+C)
+    let shutdown_sender_sigint = shutdown_sender.clone();
     tokio::spawn(async move {
         match signal::ctrl_c().await {
             Ok(()) => {
-                logging::log_shutdown(ProcessId::current(), "Received Ctrl+C signal");
-                let _ = shutdown_sender.send(()).await;
+                logging::log_shutdown(ProcessId::current(), "Received SIGINT signal");
+                let _ = shutdown_sender_sigint.send(()).await;
             }
             Err(err) => {
-                logging::log_error(ProcessId::current(), "Signal handling", &err);
+                logging::log_error(ProcessId::current(), "SIGINT handling", &err);
             }
         }
     });
+
+    // Handle SIGTERM (graceful shutdown from process managers)
+    #[cfg(unix)]
+    {
+        let shutdown_sender_sigterm = shutdown_sender.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+            
+            sigterm.recv().await;
+            logging::log_shutdown(ProcessId::current(), "Received SIGTERM signal");
+            let _ = shutdown_sender_sigterm.send(()).await;
+        });
+    }
 
     // Run main event loop
     orchestrator.run().await?;

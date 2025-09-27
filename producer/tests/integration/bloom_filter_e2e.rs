@@ -102,13 +102,15 @@ async fn test_bloom_filter_serialization_roundtrip() {
 async fn test_bloom_filter_large_dataset_e2e() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    // Create a large dataset for the orchestrator
-    // Note: Use format that matches processor normalization (alphanumeric only)
-    let orchestrator_data: Vec<String> = (0..5000).map(|i| format!("item{:04}", i)).collect();
+    // Create diverse data for meaningful testing
+    let base_words = vec!["apple", "banana", "cherry", "date", "elderberry"];
+    let normalized_data: Vec<String> = (0..5000)
+        .map(|i| base_words[i % base_words.len()].to_string())
+        .collect();
 
     // Step 1: Create and populate orchestrator bloom filter
     let mut orchestrator_bloom = GrowableBloom::new(0.01, 10000);
-    for item in &orchestrator_data {
+    for item in &normalized_data {
         orchestrator_bloom.insert(item);
     }
 
@@ -119,15 +121,15 @@ async fn test_bloom_filter_large_dataset_e2e() {
 
     // Step 3: Producer receives and uses the bloom filter
     let mut processor = Processor::new();
-    processor.update_bloom_filter(Some(serialized_bloom), orchestrator_data.clone());
+    processor.update_bloom_filter(Some(serialized_bloom), normalized_data);
 
     // Step 4: Test with mix of known and unknown items
     let test_items = vec![
-        ("item0000", true),     // Should be duplicate
-        ("item2500", true),     // Should be duplicate
-        ("item4999", true),     // Should be duplicate
-        ("newitem5000", false), // Should be new
-        ("newitem5001", false), // Should be new
+        ("apple", true),     // Should be duplicate
+        ("banana", true),    // Should be duplicate
+        ("cherry", true),    // Should be duplicate
+        ("mango", false),    // Should be new
+        ("orange", false),   // Should be new
     ];
 
     for (item, should_be_duplicate) in test_items {
@@ -166,28 +168,48 @@ async fn test_bloom_filter_large_dataset_e2e() {
 async fn test_bloom_filter_false_positive_rate() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    // Create a moderately sized dataset
+    // Create diverse normalized dataset that would come from real processor output
+    let known_words = vec![
+        "apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew", 
+        "kiwi", "lemon", "mango", "nectarine", "orange", "papaya", "quince", "raspberry",
+        "strawberry", "tangerine", "watermelon", "blueberry", "coconut", "dragonfruit",
+        "guava", "jackfruit", "lime", "melon", "peach", "pear", "pineapple", "plum"
+    ];
+    
+    // Repeat words to create larger dataset
     let dataset_size = 1000;
-    let orchestrator_data: Vec<String> = (0..dataset_size).map(|i| format!("knownitem{}", i)).collect();
+    let normalized_data: Vec<String> = (0..dataset_size)
+        .map(|i| known_words[i % known_words.len()].to_string())
+        .collect();
 
     // Create bloom filter with higher false positive rate for testing
     let mut orchestrator_bloom = GrowableBloom::new(0.05, dataset_size); // 5% FP rate
-    for item in &orchestrator_data {
+    for item in &normalized_data {
         orchestrator_bloom.insert(item);
     }
 
     let serialized_bloom = serde_json::to_vec(&orchestrator_bloom).expect("Failed to serialize bloom filter");
 
     let mut processor = Processor::new();
-    processor.update_bloom_filter(Some(serialized_bloom), orchestrator_data);
+    processor.update_bloom_filter(Some(serialized_bloom), normalized_data.clone());
 
     // Test with items that definitely shouldn't be in the bloom filter
     let test_size = 1000;
     let mut false_positives = 0;
 
-    for i in dataset_size..(dataset_size + test_size) {
-        let test_item = format!("unknownitem{}", i);
-        let response = create_test_response(test_item);
+    // Generate unique test words using different prefixes to ensure uniqueness after normalization
+    let prefixes = vec!["computer", "device", "gadget", "machine", "tool", "hardware", "software", "system"];
+    
+    for i in 0..test_size {
+        let prefix = &prefixes[i % prefixes.len()];
+        let suffix_num = i / prefixes.len();
+        let test_item = if suffix_num == 0 {
+            prefix.to_string()
+        } else {
+            format!("{}{}", prefix, "x".repeat(suffix_num)) // Add 'x' chars to make unique
+        };
+        
+        let response = create_test_response(test_item.clone());
         let stats = processor
             .process_response(response)
             .expect("Failed to process response");
@@ -274,13 +296,13 @@ async fn test_bloom_filter_deserialization_error_handling() {
 
     // Test with invalid JSON data
     let invalid_json = b"invalid json data";
-    let seen_values = vec!["test1".to_string(), "test2".to_string()];
+    let seen_values = vec!["testword".to_string(), "anotherword".to_string()];
 
     // This should gracefully fall back to rebuilding the bloom filter from seen_values
     processor.update_bloom_filter(Some(invalid_json.to_vec()), seen_values.clone());
 
     // Test that the fallback bloom filter works
-    let response = create_test_response("test1".to_string());
+    let response = create_test_response("testword".to_string());
     let stats = processor
         .process_response(response)
         .expect("Failed to process response after deserialization error");
@@ -288,21 +310,21 @@ async fn test_bloom_filter_deserialization_error_handling() {
     // Should detect as duplicate because it falls back to rebuilding from seen_values
     assert_eq!(
         stats.duplicate_count, 1,
-        "Should detect 'test1' as duplicate after fallback"
+        "Should detect 'testword' as duplicate after fallback"
     );
 
     // Test with no bloom filter data (None case)
     processor.update_bloom_filter(None, seen_values);
 
     // Should still work via fallback
-    let response2 = create_test_response("test2".to_string());
+    let response2 = create_test_response("anotherword".to_string());
     let stats2 = processor
         .process_response(response2)
         .expect("Failed to process response with no bloom filter data");
 
     assert_eq!(
         stats2.duplicate_count, 1,
-        "Should detect 'test2' as duplicate after None fallback"
+        "Should detect 'anotherword' as duplicate after None fallback"
     );
 
     println!("✅ Error handling test successful!");

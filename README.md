@@ -149,11 +149,14 @@ Key Options:
   --topic <TOPIC>              Topic for generation (enables CLI mode)
   --producers <N>              Number of producer processes (default: 5)
   --iterations <N>             Max iterations per producer (default: unlimited)
-  --max-requests <N>           Max requests per producer (overrides iterations)
+  --request-size <N>           Items requested per API call (default: 60)
   --routing-strategy <STRATEGY> Load balancing: backoff, roundrobin, priority, weighted
   --routing-config <CONFIG>     Provider:model configuration for routing (e.g., "openai:gpt-4o-mini")
   --output <DIR>               Output directory (default: ./output/<topic>)
   --log-level <LEVEL>          Logging detail: info, debug, trace (default: info)
+  --trace-ep <URL>             Distributed tracing endpoint for observability
+  --webserver-addr <ADDR>      Web interface bind address (default: 127.0.0.1:6000)
+  --producer-addr <ADDR>       Producer communication bind address (default: 127.0.0.1:6001)
   --help                       Display all available options with full descriptions
 ```
 
@@ -172,14 +175,17 @@ Key Options:
 # Basic generation with default backoff routing
 ./target/release/orchestrator --topic "Renewable Energy" --producers 3 --routing-strategy backoff --routing-config "openai:gpt-4o-mini"
 
-# Limited requests for cost control
-./target/release/orchestrator --topic "AI Ethics" --producers 5 --routing-strategy backoff --routing-config "openai:gpt-4o-mini" --max-requests 50
+# Limited iterations for cost control
+./target/release/orchestrator --topic "AI Ethics" --producers 5 --routing-strategy backoff --routing-config "openai:gpt-4o-mini" --iterations 50
 
 # Custom routing strategy with specific models
 ./target/release/orchestrator --topic "Space Technology" --routing-strategy roundrobin --routing-config "openai:gpt-4o-mini,anthropic:claude-3-sonnet"
 
-# Multiple providers with priority routing and weighted distribution
-./target/release/orchestrator --topic "Climate Change" --routing-strategy weighted --routing-config "openai:gpt-4o-mini:0.6,gemini:gemini-pro:0.4" --max-requests 100
+# Multiple providers with weighted distribution and custom request size
+./target/release/orchestrator --topic "Climate Change" --routing-strategy weighted --routing-config "openai:gpt-4o-mini:0.6,gemini:gemini-pro:0.4" --request-size 80
+
+# With distributed tracing for observability
+./target/release/orchestrator --topic "Machine Learning" --producers 4 --trace-ep "http://localhost:4317" --log-level debug
 ```
 
 ### Web Mode Usage
