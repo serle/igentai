@@ -351,13 +351,14 @@ impl Default for Metrics {
 mod tests {
     use super::*;
     use uuid::Uuid;
+    use shared::TokenUsage;
 
     fn create_test_response(provider: ProviderId, success: bool, response_time_ms: u64, tokens: u32) -> ApiResponse {
         crate::types::ApiResponse {
             provider,
             request_id: Uuid::new_v4(),
             content: "Test response".to_string(),
-            tokens_used: tokens,
+            tokens_used: TokenUsage { input_tokens: tokens as u64 / 2, output_tokens: tokens as u64 / 2 },
             response_time_ms,
             timestamp: Utc::now(),
             success,

@@ -1,6 +1,6 @@
 //! Message factory utilities for creating test messages
 
-use shared::types::ProviderId as ProviderIdEnum;
+use shared::types::{ProviderId as ProviderIdEnum, ProviderConfig};
 use shared::{
     messages::producer::{ProducerPerformanceStats, ProducerSyncStatus},
     GenerationConfig, ProcessStatus, ProcessId, ProducerCommand, ProducerCommand as OrchestratorCommand,
@@ -19,7 +19,10 @@ impl CommandFactory {
             topic: topic.to_string(),
             prompt: prompt.to_string(),
             routing_strategy: RoutingStrategy::RoundRobin {
-                providers: vec![ProviderIdEnum::OpenAI, ProviderIdEnum::Anthropic],
+                providers: vec![
+                    ProviderConfig::with_default_model(ProviderIdEnum::OpenAI),
+                    ProviderConfig::with_default_model(ProviderIdEnum::Anthropic)
+                ],
             },
             generation_config: GenerationConfig {
                 model: "gpt-4o-mini".to_string(),
@@ -43,7 +46,7 @@ impl CommandFactory {
             command_id,
             topic: topic.to_string(),
             prompt: prompt.to_string(),
-            routing_strategy: RoutingStrategy::Backoff { provider },
+            routing_strategy: RoutingStrategy::Backoff { provider: ProviderConfig::with_default_model(provider) },
             generation_config: GenerationConfig {
                 model: "gpt-4o-mini".to_string(),
                 batch_size: 1,

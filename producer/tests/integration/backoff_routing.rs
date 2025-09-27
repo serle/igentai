@@ -29,7 +29,7 @@ async fn test_backoff_routing_strategy() {
             // Verify Backoff routing strategy
             match routing_strategy {
                 shared::types::RoutingStrategy::Backoff { provider } => {
-                    assert_eq!(*provider, ProviderId::OpenAI);
+                    assert_eq!(provider.provider, ProviderId::OpenAI);
                 }
                 _ => panic!("Expected Backoff routing strategy"),
             }
@@ -57,7 +57,7 @@ async fn test_backoff_routing_different_providers() {
         match &start_command {
             shared::ProducerCommand::Start { routing_strategy, .. } => match routing_strategy {
                 shared::types::RoutingStrategy::Backoff { provider: p } => {
-                    assert_eq!(*p, *provider);
+                    assert_eq!(p.provider, *provider);
                 }
                 _ => panic!("Expected Backoff routing strategy"),
             },
@@ -76,7 +76,7 @@ async fn test_backoff_single_provider_focus() {
             match routing_strategy {
                 shared::types::RoutingStrategy::Backoff { provider } => {
                     // Backoff should only have one provider
-                    assert_eq!(*provider, ProviderId::Anthropic);
+                    assert_eq!(provider.provider, ProviderId::Anthropic);
 
                     // Verify it's different from multi-provider strategies
                     // (this is a single provider, not a list)

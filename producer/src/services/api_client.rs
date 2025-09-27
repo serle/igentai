@@ -8,10 +8,13 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use reqwest::Client;
 use serde_json::{json, Value};
-use shared::{process_debug, ProcessId, ProviderId, TokenUsage};
+use shared::{process_debug, process_info, process_error, ProcessId, ProviderId, TokenUsage};
 use std::collections::HashMap;
-use std::time::Instant;
-use tracing::{debug, error, info, warn};
+use std::time::{Duration, Instant};
+use std::cmp;
+use std::env;
+use chrono::Utc;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 /// Word dictionary for Random provider (Shakespeare words from Hamlet)
 const RANDOM_WORDS: &[&str] = &[
@@ -3139,7 +3142,7 @@ impl RealApiClient {
         let api_models = Self::load_models_from_env();
         
         let client = Client::builder()
-            .timeout(std::time::Duration::from_millis(request_timeout_ms))
+            .timeout(Duration::from_millis(request_timeout_ms))
             .build()
             .expect("Failed to create HTTP client");
 
@@ -3157,7 +3160,7 @@ impl RealApiClient {
         let api_models = Self::load_models_from_env();
         
         let client = Client::builder()
-            .timeout(std::time::Duration::from_millis(request_timeout_ms))
+            .timeout(Duration::from_millis(request_timeout_ms))
             .build()
             .expect("Failed to create HTTP client");
 
@@ -3171,7 +3174,6 @@ impl RealApiClient {
 
     /// Load API keys from environment variables
     fn load_keys_from_env() -> HashMap<ProviderId, String> {
-        use std::env;
         
         let mut keys = HashMap::new();
         
@@ -3200,7 +3202,6 @@ impl RealApiClient {
 
     /// Load API models from environment variables
     fn load_models_from_env() -> HashMap<ProviderId, String> {
-        use std::env;
         
         let mut models = HashMap::new();
         
@@ -3249,8 +3250,8 @@ impl RealApiClient {
     }
 
     /// Build request headers for provider
-    fn build_headers(&self, provider: ProviderId) -> Result<reqwest::header::HeaderMap, ProducerError> {
-        let mut headers = reqwest::header::HeaderMap::new();
+    fn build_headers(&self, provider: ProviderId) -> Result<HeaderMap, ProducerError> {
+        let mut headers = HeaderMap::new();
         headers.insert("Content-Type", "application/json".parse().unwrap());
 
         match provider {
@@ -3405,7 +3406,7 @@ impl RealApiClient {
 
     /// Generate random words for Random provider
     fn generate_random_words(&self, max_tokens: u32) -> String {
-        let word_count = std::cmp::min(max_tokens as usize, RANDOM_WORDS.len());
+        let word_count = cmp::min(max_tokens as usize, RANDOM_WORDS.len());
         let mut rng = thread_rng();
 
         // Select random words without replacement
@@ -3429,9 +3430,10 @@ impl RealApiClient {
         // Simulate realistic token usage for input/output, respecting max_tokens limit
         let input_tokens = (request.prompt.len() / 4) as u32; // Rough estimate: 4 chars per token
         let output_tokens = word_count;
-        let total_tokens = std::cmp::min(input_tokens + output_tokens, request.max_tokens);
+        let total_tokens = cmp::min(input_tokens + output_tokens, request.max_tokens);
 
-        info!(
+        process_debug!(
+            ProcessId::current(),
             "🎲 Generated {} words (input: {} tokens, output: {} tokens, total: {}) in {}ms",
             word_count, input_tokens, output_tokens, total_tokens, response_time_ms
         );
@@ -3442,137 +3444,171 @@ impl RealApiClient {
             content,
             tokens_used: TokenUsage { input_tokens: input_tokens as u64, output_tokens: output_tokens as u64 },
             response_time_ms,
-            timestamp: chrono::Utc::now(),
+            timestamp: Utc::now(),
             success: true,
             error_message: None,
         })
     }
 }
 
-#[async_trait]
-impl ApiClient for RealApiClient {
-    async fn send_request(&self, request: ApiRequest) -> ProducerResult<ApiResponse> {
-        let start_time = Instant::now();
-
-        process_debug!(
-            ProcessId::current(),
-            "🎯 API Client received request with prompt: '{}' for provider {:?}",
-            request.prompt,
-            request.provider
-        );
-
-        // Handle Random provider separately - no HTTP request needed
-        if request.provider == ProviderId::Random {
-            return self.handle_random_request(request, start_time).await;
+impl RealApiClient {
+    /// Extract backoff time in milliseconds from rate limit error response
+    pub fn extract_backoff_ms(&self, provider: ProviderId, _status: u16, headers: &HeaderMap, body: &str) -> Option<u32> {
+        match provider {
+            ProviderId::OpenAI => self.extract_openai_backoff_ms(body),
+            ProviderId::Anthropic => self.extract_anthropic_backoff_ms(headers),
+            ProviderId::Gemini => self.extract_gemini_backoff_ms(headers, body),
+            ProviderId::Random => None,
         }
+    }
 
-        // Build request for real API providers
+    /// Extract OpenAI backoff from error message: "Please try again in 442ms"
+    fn extract_openai_backoff_ms(&self, body: &str) -> Option<u32> {
+        if let Ok(json) = serde_json::from_str::<Value>(body) {
+            if let Some(message) = json["error"]["message"].as_str() {
+                // Look for "Please try again in XXXms" pattern
+                if let Some(start) = message.find("Please try again in ") {
+                    let after_prefix = &message[start + 20..];
+                    if let Some(ms_pos) = after_prefix.find("ms") {
+                        if let Ok(ms) = after_prefix[..ms_pos].trim().parse::<u32>() {
+                            return Some(ms);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract Anthropic backoff from retry-after header or rate limit headers
+    fn extract_anthropic_backoff_ms(&self, headers: &HeaderMap) -> Option<u32> {
+        // First check standard retry-after header
+        if let Some(retry_after) = headers.get("retry-after") {
+            if let Ok(value_str) = retry_after.to_str() {
+                if let Ok(seconds) = value_str.parse::<u32>() {
+                    return Some(seconds * 1000); // Convert seconds to milliseconds
+                }
+            }
+        }
+        
+        // Check Anthropic-specific rate limit reset headers
+        if let Some(reset_header) = headers.get("anthropic-ratelimit-tokens-reset") {
+            if let Ok(reset_str) = reset_header.to_str() {
+                if let Ok(reset_timestamp) = reset_str.parse::<i64>() {
+                    let now = Utc::now().timestamp();
+                    let seconds_to_wait = (reset_timestamp - now).max(1) as u32;
+                    return Some(seconds_to_wait * 1000);
+                }
+            }
+        }
+        
+        None
+    }
+
+    /// Extract Gemini backoff from retry-after header (Gemini uses standard HTTP headers)
+    fn extract_gemini_backoff_ms(&self, headers: &HeaderMap, _body: &str) -> Option<u32> {
+        // Check retry-after header
+        if let Some(retry_after) = headers.get("retry-after") {
+            if let Ok(value_str) = retry_after.to_str() {
+                if let Ok(seconds) = value_str.parse::<u32>() {
+                    return Some(seconds * 1000);
+                }
+            }
+        }
+        None
+    }
+
+    /// Calculate exponential backoff with jitter
+    pub fn calculate_exponential_backoff_ms(&self, attempt: u32) -> u32 {
+        use rand::Rng;
+        
+        let base_delay_ms = 1000u32; // 1 second base
+        let max_delay_ms = 60_000u32; // 60 seconds max
+        let multiplier: f64 = 2.0;
+        
+        // Calculate exponential delay
+        let exponential_delay = (base_delay_ms as f64 * multiplier.powi(attempt as i32)) as u32;
+        let clamped_delay = exponential_delay.min(max_delay_ms);
+        
+        // Add jitter (±10%)
+        let mut rng = rand::thread_rng();
+        let jitter = rng.gen_range(0.9..1.1);
+        (clamped_delay as f64 * jitter) as u32
+    }
+
+
+    /// Execute single API request (no retry logic)
+    async fn execute_request(&self, request: &ApiRequest) -> ProducerResult<(reqwest::Response, u64)> {
+        let start_time = Instant::now();
+        
+        // Handle Random provider locally
+        if request.provider == ProviderId::Random {
+            return Err(ProducerError::api("Random", "Should not reach execute_request"));
+        }
+        
         let url = self.get_endpoint_url(request.provider);
         let headers = self.build_headers(request.provider)?;
-        let body = self.build_request_body(request.provider, &request);
-
-        // For Gemini, add API key as query parameter (but don't log it)
+        let body = self.build_request_body(request.provider, request);
+        
         let request_builder = if request.provider == ProviderId::Gemini {
-            let api_key = self
-                .api_keys
-                .get(&request.provider)
+            let api_key = self.api_keys.get(&request.provider)
                 .ok_or_else(|| ProducerError::config("Missing Gemini API key"))?;
             self.client.post(&url).query(&[("key", api_key)])
         } else {
             self.client.post(&url)
         };
-
+        
         process_debug!(
             ProcessId::current(),
-            "🌐 Making HTTP POST to: {} with prompt in body",
-            url
-        );
-        process_debug!(
-            ProcessId::current(),
-            "📄 Request body contains prompt: '{}'",
+            "🌐 Making HTTP POST to: {} with prompt: '{}'",
+            url,
             request.prompt
         );
-        debug!("📋 Request headers: [REDACTED - contains API keys]");
-        debug!(
-            "📄 Full request body: {}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-
-        // Send request
-        let response = match request_builder.headers(headers).json(&body).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                error!("Request to {:?} failed: {}", request.provider, e);
-                return Ok(ApiResponse {
-                    provider: request.provider,
-                    request_id: request.request_id,
-                    content: String::new(),
-                    tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
-                    response_time_ms: start_time.elapsed().as_millis() as u64,
-                    timestamp: chrono::Utc::now(),
-                    success: false,
-                    error_message: Some(e.to_string()),
-                });
-            }
-        };
-
+        
+        let response = request_builder.headers(headers).json(&body).send().await
+            .map_err(|e| ProducerError::api(&request.provider.to_string(), &format!("Request failed: {}", e)))?;
+            
         let response_time_ms = start_time.elapsed().as_millis() as u64;
+        Ok((response, response_time_ms))
+    }
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            warn!("API request failed with status {}: {}", status, error_text);
-
-            return Ok(ApiResponse {
+    /// Parse response and create ApiResponse
+    async fn parse_response(
+        &self,
+        request: &ApiRequest,
+        response: reqwest::Response,
+        response_time_ms: u64,
+    ) -> ProducerResult<ApiResponse> {
+        let status = response.status();
+        
+        if !status.is_success() {
+            let headers = response.headers().clone();
+            let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            
+            process_debug!(
+                ProcessId::current(),
+                "API request to {:?} failed with status {}: {}",
+                request.provider,
+                status,
+                body
+            );
+            
+            // Include headers in error for retry logic to parse
+            return Err(ProducerError::RateLimit {
                 provider: request.provider,
-                request_id: request.request_id,
-                content: String::new(),
-                tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
-                response_time_ms,
-                timestamp: chrono::Utc::now(),
-                success: false,
-                error_message: Some(format!("HTTP {status}: {error_text}")),
+                status: status.as_u16(),
+                headers: self.headers_to_hashmap(&headers),
+                body: body.clone(),
+                message: format!("HTTP {}: {}", status, body),
             });
         }
-
-        // Parse response
-        let response_json: Value = match response.json().await {
-            Ok(json) => json,
-            Err(e) => {
-                error!("Failed to parse response JSON: {}", e);
-                return Ok(ApiResponse {
-                    provider: request.provider,
-                    request_id: request.request_id,
-                    content: String::new(),
-                    tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
-                    response_time_ms,
-                    timestamp: chrono::Utc::now(),
-                    success: false,
-                    error_message: Some(format!("JSON parsing error: {e}")),
-                });
-            }
-        };
-
-        // Extract content and tokens
-        let content = match self.extract_content(request.provider, &response_json) {
-            Ok(content) => content,
-            Err(e) => {
-                error!("Failed to extract content from response: {}", e);
-                return Ok(ApiResponse {
-                    provider: request.provider,
-                    request_id: request.request_id,
-                    content: String::new(),
-                    tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
-                    response_time_ms,
-                    timestamp: chrono::Utc::now(),
-                    success: false,
-                    error_message: Some(e.to_string()),
-                });
-            }
-        };
-
+        
+        let response_json: Value = response.json().await
+            .map_err(|e| ProducerError::api(&request.provider.to_string(), &format!("JSON parsing error: {}", e)))?;
+            
+        let content = self.extract_content(request.provider, &response_json)?;
         let tokens_used = self.extract_tokens(request.provider, &response_json);
-
+        
         process_debug!(
             ProcessId::current(),
             "✅ Received response from {:?}: {} tokens (input: {}, output: {}), {}ms",
@@ -3582,17 +3618,121 @@ impl ApiClient for RealApiClient {
             tokens_used.output_tokens,
             response_time_ms
         );
-
+        
         Ok(ApiResponse {
             provider: request.provider,
             request_id: request.request_id,
             content,
             tokens_used,
             response_time_ms,
-            timestamp: chrono::Utc::now(),
+            timestamp: Utc::now(),
             success: true,
             error_message: None,
         })
+    }
+
+    /// Convert HeaderMap to HashMap for error passing
+    pub fn headers_to_hashmap(&self, headers: &HeaderMap) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for (key, value) in headers {
+            if let Ok(value_str) = value.to_str() {
+                map.insert(key.as_str().to_string(), value_str.to_string());
+            }
+        }
+        map
+    }
+    
+    /// Convert HashMap back to HeaderMap for backoff extraction  
+    pub fn hashmap_to_headers(&self, map: &HashMap<String, String>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (key, value) in map {
+            if let Ok(name) = HeaderName::from_bytes(key.as_bytes()) {
+                if let Ok(value) = HeaderValue::from_str(value) {
+                    headers.insert(name, value);
+                }
+            }
+        }
+        headers
+    }
+}
+
+#[async_trait]
+impl ApiClient for RealApiClient {
+    /// Send request with automatic retry on rate limits
+    async fn send_request(&self, request: ApiRequest) -> ProducerResult<ApiResponse> {
+        // Handle Random provider directly (no HTTP needed)
+        if request.provider == ProviderId::Random {
+            return self.handle_random_request(request, Instant::now()).await;
+        }
+        
+        let max_retries = 5;
+        let mut attempt = 0;
+        
+        loop {
+            match self.execute_request(&request).await {
+                Ok((response, response_time_ms)) => {
+                    match self.parse_response(&request, response, response_time_ms).await {
+                        Ok(api_response) => return Ok(api_response),
+                        Err(ProducerError::RateLimit { provider, status, headers, body, .. }) => {
+                            if attempt >= max_retries {
+                                return Ok(ApiResponse {
+                                    provider: request.provider,
+                                    request_id: request.request_id,
+                                    content: String::new(),
+                                    tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
+                                    response_time_ms,
+                                    timestamp: Utc::now(),
+                                    success: false,
+                                    error_message: Some(format!("Rate limit exceeded after {} retries", max_retries)),
+                                });
+                            }
+                            
+                            let backoff_ms = self.extract_backoff_ms(provider, status, &self.hashmap_to_headers(&headers), &body)
+                                .unwrap_or_else(|| self.calculate_exponential_backoff_ms(attempt));
+                                
+                            process_info!(
+                                ProcessId::current(),
+                                "🔄 Rate limit hit for {:?}, retrying after {}ms (attempt {}/{})",
+                                provider, backoff_ms, attempt + 1, max_retries
+                            );
+                            
+                            tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms as u64)).await;
+                            attempt += 1;
+                        }
+                        Err(e) => {
+                            return Ok(ApiResponse {
+                                provider: request.provider,
+                                request_id: request.request_id,
+                                content: String::new(),
+                                tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
+                                response_time_ms,
+                                timestamp: Utc::now(),
+                                success: false,
+                                error_message: Some(e.to_string()),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    process_error!(
+                        ProcessId::current(),
+                        "Request to {:?} failed: {}", 
+                        request.provider, 
+                        e
+                    );
+                    return Ok(ApiResponse {
+                        provider: request.provider,
+                        request_id: request.request_id,
+                        content: String::new(),
+                        tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
+                        response_time_ms: 0,
+                        timestamp: Utc::now(),
+                        success: false,
+                        error_message: Some(e.to_string()),
+                    });
+                }
+            }
+        }
     }
 
     async fn health_check(&self, provider: ProviderId) -> ProducerResult<bool> {
@@ -3619,7 +3759,6 @@ impl ApiClient for RealApiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use uuid::Uuid;
 
     fn create_test_api_keys() -> HashMap<ProviderId, String> {

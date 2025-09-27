@@ -153,6 +153,7 @@ pub fn should_retry_request(response: &ApiResponse, attempt: u32, max_retries: u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shared::TokenUsage;
 
     #[test]
     fn test_select_provider_strategies() {
@@ -186,7 +187,7 @@ mod tests {
             provider: ProviderId::OpenAI,
             request_id: Uuid::new_v4(),
             content: "".to_string(),
-            tokens_used: 0,
+            tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
             response_time_ms: 0,
             timestamp: Utc::now(),
             success: false,

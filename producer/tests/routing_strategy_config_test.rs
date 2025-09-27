@@ -18,7 +18,7 @@
 //! Note: Tests in this file must run sequentially due to environment variable manipulation.
 
 use shared::types::RoutingStrategy;
-use shared::ProviderId;
+use shared::{ProviderId, TokenUsage};
 use std::env;
 use std::sync::Mutex;
 
@@ -49,7 +49,7 @@ async fn test_routing_strategy_env_configuration() {
         RoutingStrategy::Backoff { provider } => {
             println!("   Got provider: {:?}", provider);
             // .env file sets ROUTING_PRIMARY_PROVIDER=random
-            assert_eq!(provider, ProviderId::Random);
+            assert_eq!(provider.provider, ProviderId::Random);
             println!("✅ .env configuration correctly uses Random provider: {:?}", provider);
         }
         _ => panic!("Expected backoff strategy"),
@@ -69,7 +69,7 @@ async fn test_routing_strategy_env_configuration() {
     match strategy {
         RoutingStrategy::Backoff { provider } => {
             // Should fallback to Random when no config is provided
-            assert_eq!(provider, ProviderId::Random);
+            assert_eq!(provider.provider, ProviderId::Random);
             println!("✅ Fallback correctly uses Random provider when no config");
         }
         other => panic!("Expected backoff strategy with Random provider, got: {:?}", other),
@@ -127,9 +127,9 @@ async fn test_routing_strategy_validation() {
         Ok(RoutingStrategy::RoundRobin { providers }) => {
             println!("✅ Valid roundrobin config accepted: {:?}", providers);
             assert_eq!(providers.len(), 3);
-            assert!(providers.contains(&ProviderId::OpenAI));
-            assert!(providers.contains(&ProviderId::Anthropic));
-            assert!(providers.contains(&ProviderId::Random));
+            assert!(providers.iter().any(|p| p.provider == ProviderId::OpenAI));
+            assert!(providers.iter().any(|p| p.provider == ProviderId::Anthropic));
+            assert!(providers.iter().any(|p| p.provider == ProviderId::Random));
         }
         result => panic!("Expected valid roundrobin, got: {:?}", result),
     }
@@ -164,7 +164,7 @@ async fn test_all_routing_strategy_configurations() {
     match strategy {
         RoutingStrategy::Backoff { provider } => {
             println!("   Provider: {:?}", provider);
-            assert_eq!(provider, ProviderId::OpenAI);
+            assert_eq!(provider.provider, ProviderId::OpenAI);
         }
         other => panic!("Expected backoff, got: {:?}", other),
     }
@@ -192,7 +192,7 @@ async fn test_all_routing_strategy_configurations() {
     match strategy {
         RoutingStrategy::PriorityOrder { providers } => {
             println!("   Priority Order: {:?}", providers);
-            assert_eq!(providers[0], ProviderId::Gemini); // Cheapest first
+            assert_eq!(providers[0].provider, ProviderId::Gemini); // Cheapest first
             assert_eq!(providers.len(), 4);
         }
         _ => panic!("Expected priority order"),
@@ -209,9 +209,13 @@ async fn test_all_routing_strategy_configurations() {
         RoutingStrategy::Weighted { weights } => {
             println!("   Weights: {:?}", weights);
             assert_eq!(weights.len(), 3);
-            assert_eq!(weights[&ProviderId::OpenAI], 0.5);
-            assert_eq!(weights[&ProviderId::Anthropic], 0.3);
-            assert_eq!(weights[&ProviderId::Random], 0.2);
+            // Check weights by finding the correct ProviderConfig
+            let openai_config = weights.keys().find(|p| p.provider == ProviderId::OpenAI).unwrap();
+            let anthropic_config = weights.keys().find(|p| p.provider == ProviderId::Anthropic).unwrap();
+            let random_config = weights.keys().find(|p| p.provider == ProviderId::Random).unwrap();
+            assert_eq!(weights[openai_config], 0.5);
+            assert_eq!(weights[anthropic_config], 0.3);
+            assert_eq!(weights[random_config], 0.2);
             
             // Verify weights sum to 1.0
             let sum: f32 = weights.values().sum();
@@ -293,7 +297,7 @@ async fn test_e2e_backoff_openai_paris_attractions() {
         RoutingStrategy::Backoff { provider } => {
             println!("   Strategy: Backoff");
             println!("   Provider: {:?}", provider);
-            assert_eq!(provider, ProviderId::OpenAI, "Should use OpenAI provider");
+            assert_eq!(provider.provider, ProviderId::OpenAI, "Should use OpenAI provider");
         }
         _ => panic!("Expected backoff strategy"),
     }
@@ -320,7 +324,8 @@ async fn test_e2e_backoff_openai_paris_attractions() {
     
     // Test cost estimation
     println!("💰 Testing cost estimation...");
-    let cost = api_client.estimate_cost(ProviderId::OpenAI, 1000);
+    let test_tokens = TokenUsage { input_tokens: 500, output_tokens: 500 };
+    let cost = api_client.estimate_cost(ProviderId::OpenAI, &test_tokens);
     println!("   Cost for 1000 tokens: ${:.6}", cost);
     assert_eq!(cost, 0.00015, "Should match 2025 gpt-4o-mini pricing");
     
@@ -366,16 +371,16 @@ Remember:
                 println!("   {}. {}", i + 1, attraction.trim());
             }
             
-            println!("🏷️  Tokens used: {}", response.tokens_used);
+            println!("🏷️  Tokens used: {} (input: {}, output: {})", response.tokens_used.total(), response.tokens_used.input_tokens, response.tokens_used.output_tokens);
             println!("⏱️  Response time: {}ms", response.response_time_ms);
             
-            let estimated_cost = api_client.estimate_cost(ProviderId::OpenAI, response.tokens_used);
+            let estimated_cost = api_client.estimate_cost(ProviderId::OpenAI, &response.tokens_used);
             println!("💰 Actual cost: ${:.6}", estimated_cost);
             
             // Validate the response
             assert!(response.success, "API response should be successful");
             assert!(!response.content.is_empty(), "Response should have content");
-            assert!(response.tokens_used > 0, "Should report token usage");
+            assert!(response.tokens_used.total() > 0, "Should report token usage");
             assert!(response.response_time_ms > 0, "Should have response time");
             
             // Validate we got some attractions

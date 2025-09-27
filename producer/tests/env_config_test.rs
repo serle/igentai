@@ -3,7 +3,7 @@
 //! This test verifies that API keys and models are loaded correctly from environment variables.
 
 use producer::{RealApiClient, ApiClient};
-use shared::ProviderId;
+use shared::{ProviderId, TokenUsage};
 use std::env;
 
 /// Test that verifies all providers can be configured via environment variables
@@ -107,10 +107,11 @@ async fn test_env_based_configuration() {
     
     // Test cost estimation
     println!("💰 Testing cost estimation:");
-    println!("   OpenAI (1000 tokens): ${:.6}", api_client.estimate_cost(ProviderId::OpenAI, 1000));
-    println!("   Anthropic (1000 tokens): ${:.6}", api_client.estimate_cost(ProviderId::Anthropic, 1000));
-    println!("   Gemini (1000 tokens): ${:.6}", api_client.estimate_cost(ProviderId::Gemini, 1000));
-    println!("   Random (1000 tokens): ${:.6}", api_client.estimate_cost(ProviderId::Random, 1000));
+    let test_tokens = TokenUsage { input_tokens: 500, output_tokens: 500 };
+    println!("   OpenAI (1000 tokens): ${:.6}", api_client.estimate_cost(ProviderId::OpenAI, &test_tokens));
+    println!("   Anthropic (1000 tokens): ${:.6}", api_client.estimate_cost(ProviderId::Anthropic, &test_tokens));
+    println!("   Gemini (1000 tokens): ${:.6}", api_client.estimate_cost(ProviderId::Gemini, &test_tokens));
+    println!("   Random (1000 tokens): ${:.6}", api_client.estimate_cost(ProviderId::Random, &test_tokens));
     
     println!("🎉 Environment configuration test completed!");
 }

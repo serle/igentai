@@ -27,8 +27,8 @@ async fn test_start_command_handling() {
             // Verify routing strategy
             match routing_strategy {
                 shared::types::RoutingStrategy::RoundRobin { providers } => {
-                    assert!(providers.contains(&shared::types::ProviderId::OpenAI));
-                    assert!(providers.contains(&shared::types::ProviderId::Anthropic));
+                    assert!(providers.iter().any(|p| p.provider == shared::types::ProviderId::OpenAI));
+                    assert!(providers.iter().any(|p| p.provider == shared::types::ProviderId::Anthropic));
                 }
                 _ => panic!("Expected RoundRobin routing strategy"),
             }

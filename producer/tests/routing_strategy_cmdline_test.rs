@@ -177,16 +177,16 @@ Only generate canonical names, in English when available. Omit any descriptions 
                 println!("   {}. {}", i + 1, attraction.trim());
             }
             
-            println!("🏷️  Tokens used: {}", response.tokens_used);
+            println!("🏷️  Tokens used: {} (input: {}, output: {})", response.tokens_used.total(), response.tokens_used.input_tokens, response.tokens_used.output_tokens);
             println!("⏱️  Response time: {}ms", response.response_time_ms);
             
-            let estimated_cost = api_client.estimate_cost(ProviderId::OpenAI, response.tokens_used);
+            let estimated_cost = api_client.estimate_cost(ProviderId::OpenAI, &response.tokens_used);
             println!("💰 Actual cost: ${:.6}", estimated_cost);
             
             // Validate response
             assert!(response.success, "API response should be successful");
             assert!(!response.content.is_empty(), "Response should have content");
-            assert!(response.tokens_used > 0, "Should report token usage");
+            assert!(response.tokens_used.total() > 0, "Should report token usage");
             
             // Validate attractions
             assert!(attractions.len() >= 3, "Should generate at least 3 attractions");

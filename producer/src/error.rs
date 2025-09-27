@@ -1,6 +1,8 @@
 //! Producer error types and result handling
 
 use thiserror::Error;
+use std::collections::HashMap;
+use shared::ProviderId;
 
 /// Result type for producer operations
 pub type ProducerResult<T> = Result<T, ProducerError>;
@@ -13,6 +15,15 @@ pub enum ProducerError {
 
     #[error("API provider error for {provider}: {reason}")]
     ApiError { provider: String, reason: String },
+
+    #[error("Rate limit error for {provider}: {message}")]
+    RateLimit {
+        provider: ProviderId,
+        status: u16,
+        headers: HashMap<String, String>,
+        body: String,
+        message: String,
+    },
 
     #[error("Processing error: {message}")]
     ProcessingError { message: String },

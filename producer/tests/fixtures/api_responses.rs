@@ -4,7 +4,7 @@
 
 use chrono::Utc;
 use producer::{ApiRequest, ApiResponse};
-use shared::ProviderId;
+use shared::{ProviderId, TokenUsage};
 use uuid::Uuid;
 
 /// Create a successful API response for testing
@@ -13,7 +13,7 @@ pub fn create_success_response(provider: ProviderId, content: String, tokens: u3
         provider,
         request_id: Uuid::new_v4(),
         content,
-        tokens_used: tokens,
+        tokens_used: TokenUsage { input_tokens: tokens as u64 / 2, output_tokens: tokens as u64 / 2 },
         response_time_ms: 500,
         timestamp: Utc::now(),
         success: true,
@@ -27,7 +27,7 @@ pub fn create_error_response(provider: ProviderId, error: String) -> ApiResponse
         provider,
         request_id: Uuid::new_v4(),
         content: String::new(),
-        tokens_used: 0,
+        tokens_used: TokenUsage { input_tokens: 0, output_tokens: 0 },
         response_time_ms: 1000,
         timestamp: Utc::now(),
         success: false,

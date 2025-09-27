@@ -311,14 +311,14 @@ async fn test_bloom_filter_deserialization_error_handling() {
 // Helper function to create test API responses
 fn create_test_response(content: String) -> producer::types::ApiResponse {
     use chrono::Utc;
-    use shared::ProviderId;
+    use shared::{ProviderId, TokenUsage};
     use uuid::Uuid;
 
     producer::types::ApiResponse {
         provider: ProviderId::Random,
         request_id: Uuid::new_v4(),
         content,
-        tokens_used: 10,
+        tokens_used: TokenUsage { input_tokens: 5, output_tokens: 5 },
         response_time_ms: 100,
         timestamp: Utc::now(),
         success: true,

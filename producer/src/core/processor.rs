@@ -248,7 +248,7 @@ impl Default for Processor {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use shared::ProviderId;
+    use shared::{ProviderId, TokenUsage};
     use uuid::Uuid;
 
     fn create_test_response(provider: ProviderId, content: String) -> ApiResponse {
@@ -256,7 +256,7 @@ mod tests {
             provider,
             request_id: Uuid::new_v4(),
             content,
-            tokens_used: 100,
+            tokens_used: TokenUsage { input_tokens: 50, output_tokens: 50 },
             response_time_ms: 500,
             timestamp: Utc::now(),
             success: true,
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn test_simple_word_extraction() {
         let mut processor = Processor::new();
-        let response = create_test_response(ProviderId::OpenAI, "red blue green yellow orange purple".to_string());
+        let response = create_test_response(ProviderId::OpenAI, "red, blue, green, yellow, orange, purple".to_string());
 
         let stats = processor.process_response(response).unwrap();
         assert_eq!(stats.total_extracted, 6);
@@ -312,14 +312,14 @@ mod tests {
         let mut processor = Processor::new();
 
         // First occurrence should be unique
-        let response1 = create_test_response(ProviderId::OpenAI, "unique word".to_string());
+        let response1 = create_test_response(ProviderId::OpenAI, "unique, word".to_string());
         let stats1 = processor.process_response(response1).unwrap();
         assert_eq!(stats1.total_extracted, 2);
         assert_eq!(stats1.new_values.len(), 2);
         assert_eq!(stats1.duplicate_count, 0);
 
         // Second occurrence should be duplicates
-        let response2 = create_test_response(ProviderId::OpenAI, "unique word".to_string());
+        let response2 = create_test_response(ProviderId::OpenAI, "unique, word".to_string());
         let stats2 = processor.process_response(response2).unwrap();
         assert_eq!(stats2.total_extracted, 2);
         assert_eq!(stats2.new_values.len(), 0);
@@ -332,7 +332,7 @@ mod tests {
 
         processor.update_bloom_filter(None, vec!["test".to_string(), "example".to_string()]);
 
-        let response = create_test_response(ProviderId::OpenAI, "test new example fresh".to_string());
+        let response = create_test_response(ProviderId::OpenAI, "test, new, example, fresh".to_string());
         let stats = processor.process_response(response).unwrap();
 
         // "test" and "example" should be duplicates (already in bloom filter)
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn test_processor_stats() {
         let mut processor = Processor::new();
-        let response = create_test_response(ProviderId::OpenAI, "one two three".to_string());
+        let response = create_test_response(ProviderId::OpenAI, "one, two, three".to_string());
 
         let processing_stats = processor.process_response(response).unwrap();
         assert_eq!(processing_stats.new_values.len(), 3);
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_processor_reset() {
         let mut processor = Processor::new();
-        let response = create_test_response(ProviderId::OpenAI, "test data".to_string());
+        let response = create_test_response(ProviderId::OpenAI, "test, data".to_string());
 
         processor.process_response(response).unwrap();
         assert_eq!(processor.get_stats().total_processed, 2);
