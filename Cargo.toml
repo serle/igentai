@@ -11,7 +11,9 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-authors = ["iGent AI"]
+authors = ["Serle Shuman <serle.shuman@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/serle/igentai"
 
 [workspace.dependencies]
 # Common dependencies

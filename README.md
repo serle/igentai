@@ -1,6 +1,15 @@
-# Concurrent LLM Orchestration System
+# igentai
 
-A distributed Rust system that orchestrates multiple LLM providers to explore topics and generate unique attributes. The system coordinates OpenAI, Anthropic, Gemini, and test providers to maximize content generation while eliminating duplicates across all sources.
+**Distributed system for orchestrating multiple LLM providers with real-time web monitoring and duplicate elimination**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](Cargo.toml)
+
+---
+
+## Overview
+
+**igentai** is a high-performance distributed Rust system that orchestrates multiple LLM providers (OpenAI, Anthropic, Gemini) to explore topics and generate unique attributes. The system coordinates parallel content generation while eliminating duplicates across all sources, providing a real-time web interface for monitoring and control.
 
 ## Architecture Overview
 
@@ -254,3 +263,15 @@ The testing framework uses distributed tracing to validate real system behavior 
 - Monitor with `--log-level debug`
 
 Run with `--log-level debug` for detailed diagnostic information.
+
+---
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## Author
+
+Serle Shuman - [serle.shuman@gmail.com](mailto:serle.shuman@gmail.com)
